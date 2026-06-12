@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write
@@ -56,7 +56,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: lynicis/homebrew-tap
-          token: ${{ secrets.GITHUB_PAT }}
+          token: ${{ secrets.PAT }}
 
       - name: Write formula
         run: |
@@ -95,7 +95,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: lynicis/scoop-bucket
-          token: ${{ secrets.GITHUB_PAT }}
+          token: ${{ secrets.PAT }}
 
       - name: Write manifest
         run: |

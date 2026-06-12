@@ -26,7 +26,6 @@ YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 CHECK="✓"
-CROSS="✗"
 
 # --- TUI helpers ---
 BOX_WIDTH=60
@@ -310,7 +309,7 @@ show_main_menu() {
                 4) show_country_list; press_enter ;;
                 5) show_detailed_status; press_enter ;;
                 6) set_rotation_interval; press_enter ;;
-                7) daemon_menu; press_enter ;;
+                7) daemon_menu ;;
                 8)
                     if confirm "Exit?" "n"; then
                         exit 0
@@ -582,10 +581,10 @@ rotate_connection() {
 
     if [[ "$state" != "connected" ]]; then
         info "Not connected. Connecting..."
-        mullvad relay set location "$target_country" || die "Failed to set location"
-        mullvad connect --wait || die "Failed to connect"
+        mullvad relay set location "$target_country" || tui_die "Failed to set location"
+        mullvad connect --wait || tui_die "Failed to connect"
     else
-        mullvad relay set location "$target_country" || die "Failed to set location"
+        mullvad relay set location "$target_country" || tui_die "Failed to set location"
 
         local should_reconnect=true
         if [[ "${TUI_MODE:-false}" == "true" ]]; then
@@ -598,7 +597,7 @@ rotate_connection() {
                 warn "Reconnect failed, trying fresh connect..."
                 mullvad disconnect 2>/dev/null
                 sleep 1
-                mullvad connect --wait 2>/dev/null || die "Failed to connect"
+                mullvad connect --wait 2>/dev/null || tui_die "Failed to connect"
             }
         fi
     fi
@@ -614,12 +613,12 @@ rotate_connection() {
 
 rotate_wireguard_key() {
     info "Rotating WireGuard key..."
-    if ! confirm "This will immediately invalidate the current key. Continue?"; then
+    if ! confirm "This will immediately invalidate the current key. Continue?" "n"; then
         info "Cancelled."
         return
     fi
 
-    mullvad tunnel set rotate-key 2>/dev/null || die "Failed to rotate key"
+    mullvad tunnel set rotate-key 2>/dev/null || tui_die "Failed to rotate key"
 
     if confirm "Reconnect with new key?"; then
         mullvad reconnect --wait 2>/dev/null || {
@@ -635,36 +634,36 @@ rotate_wireguard_key() {
 
 show_detailed_status() {
     clear
-    echo "┌───────────────────────────────────────────┐"
-    echo "│         Mullvad Connection Status         │"
-    echo "├───────────────────────────────────────────┤"
+    draw_box_top
+    draw_box_line "Mullvad Connection Status"
+    draw_box_sep
 
     get_status_summary
-    printf "│ State:     %-30s │\n" "$state"
-    printf "│ Relay:     %-30s │\n" "${hostname:--}"
-    printf "│ Location:  %-30s │\n" "${city}/${country}"
-    printf "│ IPv4:      %-30s │\n" "${ipv4:--}"
+    draw_box_line "State:     $state"
+    draw_box_line "Relay:     ${hostname:--}"
+    draw_box_line "Location:  ${city}/${country}"
+    draw_box_line "IPv4:      ${ipv4:--}"
 
     # Show current relay constraints
-    echo "├───────────────────────────────────────────┤"
+    draw_box_sep
     local relay_config
     relay_config=$(mullvad relay get 2>/dev/null || echo "unavailable")
     while IFS= read -r line; do
         # trim leading space
         line="${line#"${line%%[![:space:]]*}"}"
-        printf "│ %-41s │\n" "$line"
+        draw_box_line "$line"
     done <<< "$relay_config"
 
     # Show tunnel info
-    echo "├───────────────────────────────────────────┤"
+    draw_box_sep
     local tunnel_info
     tunnel_info=$(mullvad tunnel get 2>/dev/null || echo "unavailable")
     while IFS= read -r line; do
         line="${line#"${line%%[![:space:]]*}"}"
-        printf "│ %-41s │\n" "$line"
+        draw_box_line "$line"
     done <<< "$tunnel_info"
 
-    echo "└───────────────────────────────────────────┘"
+    draw_box_bottom
 }
 
 # --- Daemon and interval management ---
@@ -685,6 +684,17 @@ set_rotation_interval() {
         fi
     else
         info "Manual mode. Use 'Rotate connection' from menu."
+        local has_daemon=false
+        if [[ "$OS" == "macos" ]]; then
+            [[ -f "${HOME}/Library/LaunchAgents/com.user.mullvad-rotator.plist" ]] && has_daemon=true
+        elif [[ "$OS" == "linux" ]]; then
+            [[ -f "${HOME}/.config/systemd/user/mullvad-rotator.timer" ]] && has_daemon=true
+        fi
+        if $has_daemon; then
+            if confirm "Daemon service is installed. Remove it now?" "y"; then
+                daemon_service_remove
+            fi
+        fi
     fi
 }
 
@@ -782,19 +792,66 @@ daemon_service_remove() {
 }
 
 daemon_menu() {
-    clear
-    echo "Daemon Service"
-    echo ""
-    echo "1) Install daemon"
-    echo "2) Remove daemon"
-    echo "3) Back"
-    echo ""
-    read -p "Choose [1-3]: " d_choice
-    case "$d_choice" in
-        1) daemon_service_install ;;
-        2) daemon_service_remove ;;
-        *) return ;;
-    esac
+    local d_cursor=0
+    local d_items=(
+        "Install daemon"
+        "Remove daemon"
+        "Back"
+    )
+
+    tui_cursor_hide
+
+    while true; do
+        clear
+        draw_box_top
+        draw_box_line "Daemon Service"
+        draw_box_sep
+
+        for ((i=0; i<3; i++)); do
+            local num=$((i+1))
+            if (( i == d_cursor )); then
+                draw_box_line "${BOLD}${GREEN}> ${num}) ${d_items[$i]}${NC}"
+            else
+                draw_box_line "  ${num}) ${d_items[$i]}"
+            fi
+        done
+
+        draw_box_sep
+        draw_box_line "↑↓ Navigate  Enter Select"
+        draw_box_bottom
+        echo ""
+
+        read_key
+
+        local action=0
+        case "$KEY" in
+            up)
+                d_cursor=$(( (d_cursor - 1 + 3) % 3 ))
+                ;;
+            down)
+                d_cursor=$(( (d_cursor + 1) % 3 ))
+                ;;
+            enter)
+                action=$(( d_cursor + 1 ))
+                ;;
+            1|2|3)
+                action="$KEY"
+                ;;
+            escape)
+                action=3
+                ;;
+        esac
+
+        if (( action > 0 )); then
+            tui_cursor_show
+            case "$action" in
+                1) daemon_service_install; press_enter ;;
+                2) daemon_service_remove; press_enter ;;
+                3) return ;;
+            esac
+            tui_cursor_hide
+        fi
+    done
 }
 
 daemon_mode() {

@@ -18,19 +18,19 @@ INTERVAL=0
 ROTATE_KEY=false
 
 # --- Color/ANSI ---
-BOLD='\033[1m'
-DIM='\033[2m'
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+BOLD=$'\033[1m'
+DIM=$'\033[2m'
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[0;33m'
+CYAN=$'\033[0;36m'
+NC=$'\033[0m'
 CHECK="✓"
 
 # --- TUI helpers ---
 BOX_WIDTH=60
 
-strip_ansi() { printf '%s' "$1" | sed 's/\x1b\[[0-9;]*m//g'; }
+strip_ansi() { printf '%s' "$1" | sed $'s/\e\\[[0-9;]*m//g'; }
 
 draw_box_line() {
     local content="$1" width="${2:-$BOX_WIDTH}"
@@ -53,18 +53,37 @@ read_key() {
     IFS= read -rsn1 byte
 
     if [[ "$byte" == $'\x1b' ]]; then
-        local ext=""
-        read -rsn4 -t 0.05 ext || true
-        case "$ext" in
-            "[A")  KEY="up" ;;
-            "[B")  KEY="down" ;;
-            "[5~") KEY="pageup" ;;
-            "[6~") KEY="pagedown" ;;
-            "[H")  KEY="home" ;;
-            "[F")  KEY="end" ;;
-            "")    KEY="escape" ;;
-            *)     KEY="unknown" ;;
-        esac
+        if read -t 0; then
+            local char1 char2 char3
+            read -rsn1 char1
+            if [[ "$char1" == "[" ]]; then
+                read -rsn1 char2
+                if [[ "$char2" =~ ^[0-9]$ ]]; then
+                    read -rsn1 char3
+                    if [[ "$char3" == "~" ]]; then
+                        case "$char2" in
+                            5) KEY="pageup" ;;
+                            6) KEY="pagedown" ;;
+                            *) KEY="unknown" ;;
+                        esac
+                    else
+                        KEY="unknown"
+                    fi
+                else
+                    case "$char2" in
+                        A) KEY="up" ;;
+                        B) KEY="down" ;;
+                        H) KEY="home" ;;
+                        F) KEY="end" ;;
+                        *) KEY="unknown" ;;
+                    esac
+                fi
+            else
+                KEY="unknown"
+            fi
+        else
+            KEY="escape"
+        fi
     elif [[ "$byte" == $'\x7f' || "$byte" == $'\x08' ]]; then
         KEY="backspace"
     elif [[ "$byte" == "" ]]; then

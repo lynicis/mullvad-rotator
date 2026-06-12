@@ -94,7 +94,13 @@ die()    { error "$*"; exit 1; }
 
 confirm() {
     local prompt="$1" default="${2:-y}"
-    read -p "$prompt (Y/n) " ans
+    local suffix
+    if [[ "$default" =~ ^[Yy] ]]; then
+        suffix="(Y/n)"
+    else
+        suffix="(y/N)"
+    fi
+    read -p "$prompt $suffix " ans
     ans="${ans:-$default}"
     [[ "$ans" =~ ^[Yy] ]]
 }
@@ -225,50 +231,94 @@ print_status_line() {
 
 # --- Main TUI menu ---
 show_main_menu() {
-    local choice
     TUI_MODE=true
+    local menu_cursor=0
+    local menu_items=(
+        "Rotate connection"
+        "Rotate WireGuard key"
+        "Select countries"
+        "Show available countries"
+        "View detailed status"
+        "Set rotation interval"
+        "Install/remove daemon service"
+        "Exit"
+    )
+    
+    tui_cursor_hide
 
     while true; do
         clear
-        echo "┌────────────────────────────────────────────────┐"
-        printf "│ ${BOLD}Mullvad Rotator v${VERSION}${NC}                      │\n"
-        echo "├────────────────────────────────────────────────┤"
-        printf "│  Status: "
+        draw_box_top
+        draw_box_line "${BOLD}Mullvad Rotator v${VERSION}${NC}"
+        draw_box_sep
         get_status_summary
+        local status_str
         if [[ "$state" == "connected" ]]; then
-            printf "${GREEN}%-8s${NC}" "$state"
+            status_str="Status: ${GREEN}${state}${NC}"
         else
-            printf "${YELLOW}%-8s${NC}" "$state"
+            status_str="Status: ${YELLOW}${state}${NC}"
         fi
-        printf "                         │\n"
-        printf "│  Relay: %-38s │\n" "${hostname}"
-        printf "│  Location: %-35s │\n" "${country}/${city}"
-        echo "├────────────────────────────────────────────────┤"
-        echo "│                                                │"
-        echo "│  1) Rotate connection                          │"
-        echo "│  2) Rotate WireGuard key                       │"
-        echo "│  3) Select countries                           │"
-        echo "│  4) Show available countries                   │"
-        echo "│  5) View detailed status                       │"
-        echo "│  6) Set rotation interval                      │"
-        echo "│  7) Install/remove daemon service              │"
-        echo "│  8) Exit                                       │"
-        echo "│                                                │"
-        echo "└────────────────────────────────────────────────┘"
-        echo ""
-        read -p "Choose [1-8]: " choice
+        draw_box_line "$status_str"
+        draw_box_line "Relay: ${hostname}"
+        draw_box_line "Location: ${country}/${city}"
+        
+        local interval_str="manual"
+        (( INTERVAL > 0 )) && interval_str="${INTERVAL}m"
+        draw_box_line "Mode: ${MODE} | Interval: ${interval_str}"
+        draw_box_sep
 
-        case "$choice" in
-            1) rotate_connection; press_enter ;;
-            2) rotate_wireguard_key; press_enter ;;
-            3) select_countries_tui; press_enter ;;
-            4) show_country_list; press_enter ;;
-            5) show_detailed_status; press_enter ;;
-            6) set_rotation_interval; press_enter ;;
-            7) daemon_menu; press_enter ;;
-            8) exit 0 ;;
-            *)  ;;
+        for ((i=0; i<8; i++)); do
+            local num=$((i+1))
+            if (( i == menu_cursor )); then
+                draw_box_line "${BOLD}${GREEN}> ${num}) ${menu_items[$i]}${NC}"
+            else
+                draw_box_line "  ${num}) ${menu_items[$i]}"
+            fi
+        done
+
+        draw_box_sep
+        draw_box_line "↑↓ Navigate  Enter Select"
+        draw_box_bottom
+        echo ""
+
+        read_key
+
+        local action=0
+        case "$KEY" in
+            up)
+                menu_cursor=$(( (menu_cursor - 1 + 8) % 8 ))
+                ;;
+            down)
+                menu_cursor=$(( (menu_cursor + 1) % 8 ))
+                ;;
+            enter)
+                action=$(( menu_cursor + 1 ))
+                ;;
+            1|2|3|4|5|6|7|8)
+                action="$KEY"
+                ;;
+            *)
+                ;;
         esac
+
+        if (( action > 0 )); then
+            tui_cursor_show
+            case "$action" in
+                1) rotate_connection; press_enter ;;
+                2) rotate_wireguard_key; press_enter ;;
+                3) select_countries_tui; press_enter ;;
+                4) show_country_list; press_enter ;;
+                5) show_detailed_status; press_enter ;;
+                6) set_rotation_interval; press_enter ;;
+                7) daemon_menu; press_enter ;;
+                8)
+                    if confirm "Exit?" "n"; then
+                        exit 0
+                    fi
+                    ;;
+            esac
+            tui_cursor_hide
+        fi
     done
 }
 

@@ -890,6 +890,10 @@ main() {
         daemon-setup)
             daemon_setup
             ;;
+        --version|-v)
+            echo "mullvad-rotator v${VERSION}"
+            exit 0
+            ;;
         --help|-h)
             show_help
             ;;

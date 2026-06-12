@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha256_sh: ${{ steps.hash.outputs.sha256_sh }}
+      sha256_tar: ${{ steps.hash.outputs.sha256_tar }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Extract version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute checksums
+        id: hash
+        run: |
+          echo "sha256_sh=$(sha256sum mullvad-rotator.sh | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          curl -sL "${{ github.server_url }}/${{ github.repository }}/archive/refs/tags/${{ github.ref_name }}.tar.gz" -o /tmp/repo.tar.gz
+          echo "sha256_tar=$(sha256sum /tmp/repo.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          prev_tag=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+          if [ -n "$prev_tag" ]; then
+            echo "## Changes since $prev_tag" > /tmp/release-notes.md
+            git log "$prev_tag..HEAD" --oneline --no-decorate >> /tmp/release-notes.md
+          else
+            echo "Initial release v${{ steps.version.outputs.version }}" > /tmp/release-notes.md
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: Mullvad Rotator v${{ steps.version.outputs.version }}
+          body_path: /tmp/release-notes.md
+          files: mullvad-rotator.sh
+
+  homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: lynicis/homebrew-tap
+          token: ${{ secrets.GITHUB_PAT }}
+
+      - name: Write formula
+        run: |
+          cat > Formula/mullvad-rotator.rb << RUBY
+          class MullvadRotator < Formula
+            desc "Rotate Mullvad VPN relays and WireGuard keys"
+            homepage "https://github.com/lynicis/mullvad-rotator"
+            url "https://github.com/lynicis/mullvad-rotator/archive/refs/tags/v${{ needs.release.outputs.version }}.tar.gz"
+            sha256 "${{ needs.release.outputs.sha256_tar }}"
+            license "MIT"
+
+            depends_on "mullvad" => :run
+
+            def install
+              bin.install "mullvad-rotator.sh" => "mullvad-rotator"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/mullvad-rotator --version 2>&1")
+            end
+          end
+          RUBY
+
+      - name: Commit & push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/mullvad-rotator.rb
+          git commit -m "mullvad-rotator v${{ needs.release.outputs.version }}"
+          git push
+
+  scoop:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: lynicis/scoop-bucket
+          token: ${{ secrets.GITHUB_PAT }}
+
+      - name: Write manifest
+        run: |
+          cat > mullvad-rotator.json << JSON
+          {
+            "version": "${{ needs.release.outputs.version }}",
+            "architecture": {
+              "64bit": {
+                "url": "https://github.com/lynicis/mullvad-rotator/releases/download/v${{ needs.release.outputs.version }}/mullvad-rotator.sh",
+                "bin": ["mullvad-rotator.sh"],
+                "hash": "${{ needs.release.outputs.sha256_sh }}"
+              }
+            },
+            "homepage": "https://github.com/lynicis/mullvad-rotator",
+            "license": "MIT",
+            "description": "Rotate Mullvad VPN relays and WireGuard keys"
+          }
+          JSON
+
+      - name: Commit & push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add mullvad-rotator.json
+          git commit -m "mullvad-rotator v${{ needs.release.outputs.version }}"
+          git push

@@ -25,6 +25,7 @@
   - [TUI](#tui)
 - [Daemon](#daemon)
 - [Configuration](#configuration)
+- [Uninstall](#uninstall)
 - [Development](#development)
 - [Contributing](#contributing)
 - [License](#license)
@@ -115,6 +116,42 @@ MODE="random"           # Rotation mode
 INTERVAL=30             # Minutes between rotations (0 = disabled)
 ROTATE_KEY=false        # Also rotate WireGuard key on each cycle
 ```
+
+## Uninstall
+
+Remove the binary and config:
+
+### Homebrew
+
+```bash
+brew uninstall mullvad-rotator
+brew untap lynicis/tap
+```
+
+### Scoop
+
+```bash
+scoop uninstall mullvad-rotator
+```
+
+### Manual
+
+```bash
+sudo rm /usr/local/bin/mullvad-rotator
+```
+
+### Cleanup (all methods)
+
+Remove config, cache, and daemon files:
+
+```bash
+rm -rf ~/.config/mullvad-rotator
+```
+
+### Daemon cleanup
+
+- **macOS**: `launchctl unload ~/Library/LaunchAgents/com.user.mullvad-rotator.plist` then `rm ~/Library/LaunchAgents/com.user.mullvad-rotator.plist`
+- **Linux**: `systemctl --user disable mullvad-rotator.timer && systemctl --user stop mullvad-rotator.timer` then `rm ~/.config/systemd/user/mullvad-rotator.*`
 
 ## Development
 

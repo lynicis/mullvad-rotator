@@ -53,30 +53,35 @@ read_key() {
     IFS= read -rsn1 byte
 
     if [[ "$byte" == $'\x1b' ]]; then
-        if read -t 0; then
-            local char1 char2 char3
-            read -rsn1 char1
+        local char1="" char2="" char3=""
+        if read -rsn1 -t 1 char1; then
             if [[ "$char1" == "[" ]]; then
-                read -rsn1 char2
-                if [[ "$char2" =~ ^[0-9]$ ]]; then
-                    read -rsn1 char3
-                    if [[ "$char3" == "~" ]]; then
+                if read -rsn1 -t 1 char2; then
+                    if [[ "$char2" =~ ^[0-9]$ ]]; then
+                        if read -rsn1 -t 1 char3; then
+                            if [[ "$char3" == "~" ]]; then
+                                case "$char2" in
+                                    5) KEY="pageup" ;;
+                                    6) KEY="pagedown" ;;
+                                    *) KEY="unknown" ;;
+                                esac
+                            else
+                                KEY="unknown"
+                            fi
+                        else
+                            KEY="unknown"
+                        fi
+                    else
                         case "$char2" in
-                            5) KEY="pageup" ;;
-                            6) KEY="pagedown" ;;
+                            A) KEY="up" ;;
+                            B) KEY="down" ;;
+                            H) KEY="home" ;;
+                            F) KEY="end" ;;
                             *) KEY="unknown" ;;
                         esac
-                    else
-                        KEY="unknown"
                     fi
                 else
-                    case "$char2" in
-                        A) KEY="up" ;;
-                        B) KEY="down" ;;
-                        H) KEY="home" ;;
-                        F) KEY="end" ;;
-                        *) KEY="unknown" ;;
-                    esac
+                    KEY="unknown"
                 fi
             else
                 KEY="unknown"

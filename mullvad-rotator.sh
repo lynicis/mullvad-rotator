@@ -300,10 +300,7 @@ select_countries_tui() {
     local filter_query=""
 
     # Hide cursor
-    printf "\033[?25l"
-    
-    # Restore cursor on exit
-    trap 'printf "\033[?25h"' RETURN EXIT
+    tui_cursor_hide
 
     while true; do
         # Build filtered list of indices
@@ -346,17 +343,17 @@ select_countries_tui() {
         fi
 
         clear
-        echo "┌──────────────────────────────────────────────────────────────────────┐"
-        echo "│  Select Countries (Arrow Keys to move, Space to toggle, Enter to OK) │"
-        echo "│  Type letters to search/filter. Backspace to delete.                 │"
-        echo "│  Press 'Esc' to clear search or exit. 'a'=All, 'n'=None.             │"
-        echo "└──────────────────────────────────────────────────────────────────────┘"
+        draw_box_top
+        draw_box_line "Select Countries (↑↓/Space/Enter)"
+        draw_box_line "Type to search. Backspace to delete."
+        draw_box_line "Esc: clear/exit. 'a': All, 'n': None."
+        draw_box_bottom
         if [[ -n "$filter_query" ]]; then
-            printf "${YELLOW}Search: %-60s${NC}\n" "$filter_query"
+            printf "${YELLOW}Search: %-48s${NC}\n" "$filter_query"
         else
             printf "${DIM}Search: Type to filter... (e.g. 'se' or 'sweden')${NC}\n"
         fi
-        echo "────────────────────────────────────────────────────────────────────────"
+        draw_box_line_plain
 
         if (( filtered_total == 0 )); then
             echo "  [No matching countries found]"
@@ -375,82 +372,86 @@ select_countries_tui() {
             done
         fi
 
-        echo "────────────────────────────────────────────────────────────────────────"
+        draw_box_line_plain
         local sel_count=0
         for s in "${selected[@]}"; do
             [[ "$s" == "1" ]] && (( sel_count++ ))
         done
-        printf "Viewing %d/%d countries | Selected: %d\n" "$filtered_total" "$total" "$sel_count"
+        printf "Viewing %d/%d countries | Selected: %d | PgUp/PgDn\n" "$filtered_total" "$total" "$sel_count"
 
         # Read key press
-        local key=""
-        IFS= read -rsn1 key
-        
-        # Check for escape sequence
-        if [[ "$key" == $'\x1b' ]]; then
-            # Check if there are remaining characters in stdin (timeout 0.05s)
-            read -rsn2 -t 0.05 ext
-            if [[ -n "$ext" ]]; then
-                key+="$ext"
-            else
-                # Single Esc key was pressed
-                if [[ -n "$filter_query" ]]; then
-                    filter_query=""
-                    cursor=0
-                    continue
-                else
-                    printf "\033[?25h"
-                    trap - RETURN EXIT
-                    return
-                fi
-            fi
-        fi
+        read_key
 
-        # Handle backspace
-        if [[ "$key" == $'\x7f' || "$key" == $'\x08' ]]; then
-            if [[ -n "$filter_query" ]]; then
-                filter_query="${filter_query%?}"
-                cursor=0
-            fi
-            continue
-        fi
-
-        case "$key" in
-            # Arrow Up
-            $'\x1b[A')
+        case "$KEY" in
+            up)
                 (( cursor > 0 )) && (( cursor-- ))
                 ;;
-            # Arrow Down
-            $'\x1b[B')
+            down)
                 (( cursor < filtered_total - 1 )) && (( cursor++ ))
                 ;;
-            # Space
-            " ")
+            pageup)
+                cursor=$(( cursor - window_size ))
+                (( cursor < 0 )) && cursor=0
+                ;;
+            pagedown)
+                cursor=$(( cursor + window_size ))
+                (( cursor >= filtered_total )) && cursor=$(( filtered_total - 1 ))
+                (( cursor < 0 )) && cursor=0
+                ;;
+            home)
+                cursor=0
+                ;;
+            end)
+                cursor=$(( filtered_total - 1 ))
+                (( cursor < 0 )) && cursor=0
+                ;;
+            space)
                 if (( filtered_total > 0 )); then
                     local idx=${filtered_indices[$cursor]}
                     selected[$idx]=$(( 1 - selected[$idx] ))
                 fi
                 ;;
-            # Enter
-            "")
+            enter)
                 break
                 ;;
-            # Select All
+            escape)
+                if [[ -n "$filter_query" ]]; then
+                    filter_query=""
+                    cursor=0
+                else
+                    tui_cursor_show
+                    return
+                fi
+                ;;
+            backspace)
+                if [[ -n "$filter_query" ]]; then
+                    filter_query="${filter_query%?}"
+                    cursor=0
+                fi
+                ;;
             a|A)
-                for idx in "${filtered_indices[@]}"; do
-                    selected[$idx]=1
-                done
+                if [[ -z "$filter_query" ]]; then
+                    for idx in "${filtered_indices[@]}"; do
+                        selected[$idx]=1
+                    done
+                else
+                    filter_query+="$KEY"
+                    cursor=0
+                fi
                 ;;
-            # Select None
             n|N)
-                for idx in "${filtered_indices[@]}"; do
-                    selected[$idx]=0
-                done
+                if [[ -z "$filter_query" ]]; then
+                    for idx in "${filtered_indices[@]}"; do
+                        selected[$idx]=0
+                    done
+                else
+                    filter_query+="$KEY"
+                    cursor=0
+                fi
                 ;;
-            # Print printable characters
             *)
-                if [[ "$key" =~ ^[[:print:]]$ ]]; then
-                    filter_query+="$key"
+                if [[ ${#KEY} -eq 1 ]]; then
+                    filter_query+="$KEY"
                     cursor=0
                 fi
                 ;;
@@ -458,8 +459,7 @@ select_countries_tui() {
     done
 
     # Restore cursor
-    printf "\033[?25h"
-    trap - RETURN EXIT
+    tui_cursor_show
 
     # Save selection
     COUNTRIES=""

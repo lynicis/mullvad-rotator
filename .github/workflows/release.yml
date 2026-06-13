@@ -68,16 +68,20 @@ jobs:
             sha256 "${{ needs.release.outputs.sha256_tar }}"
             license "MIT"
 
-            depends_on "mullvad-vpn" => :run
-
             def install
               bin.install "mullvad-rotator.sh" => "mullvad-rotator"
+            end
+
+            def caveats
+              <<~EOS
+                mullvad-rotator requires the Mullvad VPN client (cask mullvad-vpn).
+                Install it first: brew install --cask mullvad-vpn
+              EOS
             end
 
             test do
               assert_match version.to_s, shell_output("#{bin}/mullvad-rotator --version 2>&1")
             end
-          end
           RUBY
 
       - name: Commit & push

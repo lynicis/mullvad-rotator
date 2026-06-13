@@ -6,6 +6,12 @@ SCRIPT="${SCRIPT_DIR}/mullvad-rotator.sh"
 BIN_DIR="${HOME}/.local/bin"
 BIN="${BIN_DIR}/mullvad-rotator"
 
+# OS detection
+case "$(uname)" in
+    MINGW*|MSYS*|CYGWIN*) IS_WINDOWS=true ;;
+    *)                     IS_WINDOWS=false ;;
+esac
+
 echo "Installing Mullvad Rotator..."
 echo ""
 
@@ -15,17 +21,25 @@ echo ""
 # Create bin dir
 mkdir -p "$BIN_DIR"
 
-# Create symlink
-ln -sf "$SCRIPT" "$BIN"
+# Create symlink (or copy on Windows — NTFS symlinks require admin)
+if $IS_WINDOWS; then
+    cp "$SCRIPT" "$BIN"
+    echo "  ✓ Copied: ${BIN} <- ${SCRIPT}"
+else
+    ln -sf "$SCRIPT" "$BIN"
+    echo "  ✓ Symlinked: ${BIN} -> ${SCRIPT}"
+fi
 chmod +x "$SCRIPT"
-
-echo "  ✓ Symlinked: ${BIN} -> ${SCRIPT}"
 
 # Path check
 if [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
     echo ""
     echo "  ⚠  ${BIN_DIR} is not in your PATH."
-    echo "     Add this to your ~/.bashrc or ~/.zshrc:"
+    if $IS_WINDOWS; then
+        echo "     Add this to your ~/.bashrc (Git Bash):"
+    else
+        echo "     Add this to your ~/.bashrc or ~/.zshrc:"
+    fi
     echo "       export PATH=\"\${HOME}/.local/bin:\${PATH}\""
 fi
 
@@ -50,3 +64,4 @@ if [[ "$daemon_choice" =~ ^[Yy] ]]; then
         echo "Use the TUI menu to configure daemon: mullvad-rotator"
     }
 fi
+

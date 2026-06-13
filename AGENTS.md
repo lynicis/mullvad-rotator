@@ -24,19 +24,22 @@ bash -n mullvad-rotator.sh    # only test available (no test framework)
 | Path | Role |
 |------|------|
 | `mullvad-rotator.sh` | Single entrypoint. All logic in one file. |
-| `install.sh` | Symlinks script to `~/.local/bin/mullvad-rotator` |
+| `install.sh` | Symlinks (or copies on Windows) script to `~/.local/bin/mullvad-rotator` |
 | `docs/plans/` | Stale implementation plan (historic only) |
 
 ## Hard-won context
 
 - **Only dependency:** `mullvad` CLI (must be installed + daemon running).
-- **Config:** `~/.config/mullvad-rotator/config` — auto-created on first run.
-- **Cache:** `~/.config/mullvad-rotator/countries.cache` (1-hour TTL). Refreshed
+  On Windows, requires Git Bash or MSYS2 to run the bash script.
+- **Config:** `~/.config/mullvad-rotator/config` (macOS/Linux) or
+  `%APPDATA%\mullvad-rotator\config` (Windows) — auto-created on first run.
+- **Cache:** `<config_dir>/countries.cache` (1-hour TTL). Refreshed
   via `mullvad relay list`.
-- **Daemon log:** `~/.config/mullvad-rotator/daemon.log`.
+- **Daemon log:** `<config_dir>/daemon.log`.
 - **Daemon platform split:** macOS → launchd plist at
   `~/Library/LaunchAgents/com.user.mullvad-rotator.plist`. Linux → systemd
   user units at `~/.config/systemd/user/mullvad-rotator.{service,timer}`.
+  Windows → Task Scheduler entry `MullvadRotator` via `schtasks.exe`.
 - **Subcommands:** `daemon` (one rotation cycle, for the OS timer),
   `daemon-setup` (install + configure timer, called by `install.sh`).
 - **No jq:** JSON parsed with `grep`/`sed`.
@@ -50,7 +53,7 @@ bash -n mullvad-rotator.sh    # only test available (no test framework)
   ./mullvad-rotator.sh rotate      Rotate to a random country (supports --dry-run)
   ./mullvad-rotator.sh rotate-key  Rotate WireGuard key
   ./mullvad-rotator.sh status      Show detailed status
-  ./mullvad-rotator.sh daemon      Run one rotation cycle (for launchd/systemd)
+  ./mullvad-rotator.sh daemon      Run one rotation cycle (for launchd/systemd/Task Scheduler)
   ./mullvad-rotator.sh daemon-setup  Setup and install daemon service
 ```
 
@@ -69,7 +72,7 @@ search/filter, Enter to confirm, `a`/`n` for all/none, Esc to clear search.
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **mullvad-rotator** (39 symbols, 34 relationships, 0 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **mullvad-rotator** (45 symbols, 39 relationships, 0 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 

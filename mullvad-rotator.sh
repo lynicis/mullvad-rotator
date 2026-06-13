@@ -1,17 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Ensure common bin directories are in PATH (needed for non-interactive shells like launchd/systemd)
-export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+VERSION="1.1.0"
 
-VERSION="1.0.0"
+# ═══════════════════════════════════════════════════════════
+# OS Detection (must run before paths & PATH setup)
+# ═══════════════════════════════════════════════════════════
+
+case "$(uname)" in
+    Darwin)              OS="macos";   STAT_CMD="stat -f %m" ;;
+    Linux)               OS="linux";   STAT_CMD="stat -c %Y" ;;
+    MINGW*|MSYS*|CYGWIN*) OS="windows"; STAT_CMD="stat -c %Y" ;;
+    *)                   echo "Unsupported OS: $(uname)" >&2; exit 1 ;;
+esac
+
+# ═══════════════════════════════════════════════════════════
+# PATH Setup (needed for non-interactive shells: launchd/systemd/Task Scheduler)
+# ═══════════════════════════════════════════════════════════
+
+if [[ "$OS" == "windows" ]]; then
+    export PATH="/c/Program Files/Mullvad VPN:${PATH}"
+else
+    export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+fi
 
 # ═══════════════════════════════════════════════════════════
 # Paths & Defaults
 # ═══════════════════════════════════════════════════════════
 
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-CONFIG_DIR="${HOME}/.config/mullvad-rotator"
+if [[ "$OS" == "windows" ]]; then
+    CONFIG_DIR="${APPDATA}/mullvad-rotator"
+else
+    CONFIG_DIR="${HOME}/.config/mullvad-rotator"
+fi
 CONFIG_FILE="${CONFIG_DIR}/config"
 CACHE_FILE="${CONFIG_DIR}/countries.cache"
 CACHE_TTL=3600
@@ -34,16 +56,6 @@ YELLOW=$'\033[0;33m'
 CYAN=$'\033[0;36m'
 NC=$'\033[0m'
 CHECK="✓"
-
-# ═══════════════════════════════════════════════════════════
-# OS Detection
-# ═══════════════════════════════════════════════════════════
-
-case "$(uname)" in
-    Darwin) OS="macos"; STAT_CMD="stat -f %m" ;;
-    Linux)  OS="linux";  STAT_CMD="stat -c %Y" ;;
-    *)      echo "Unsupported OS: $(uname)" >&2; exit 1 ;;
-esac
 
 # ═══════════════════════════════════════════════════════════
 # Utility Functions
@@ -488,6 +500,8 @@ is_daemon_installed() {
         [[ -f "${HOME}/Library/LaunchAgents/com.user.mullvad-rotator.plist" ]]
     elif [[ "$OS" == "linux" ]]; then
         [[ -f "${HOME}/.config/systemd/user/mullvad-rotator.timer" ]]
+    elif [[ "$OS" == "windows" ]]; then
+        schtasks.exe /query /tn "MullvadRotator" &>/dev/null
     else
         return 1
     fi
@@ -571,6 +585,32 @@ EOF
         systemctl --user enable --now mullvad-rotator.timer 2>/dev/null && \
             success "Daemon installed (every ${INTERVAL} min)" || \
             warn "Created service files but systemctl failed. Check manually."
+
+    elif [[ "$OS" == "windows" ]]; then
+        local interval_secs=$((INTERVAL * 60))
+        (( interval_secs < 60 )) && interval_secs=1800  # default 30min
+
+        local interval_mins=$((interval_secs / 60))
+
+        # Convert script path to Windows-style for schtasks
+        local win_script_path
+        win_script_path=$(cygpath -w "$SCRIPT_PATH" 2>/dev/null || \
+            echo "$SCRIPT_PATH" | sed 's|^/\([a-zA-Z]\)/|\1:\\|;s|/|\\|g')
+
+        local bash_exe
+        bash_exe=$(cygpath -w "$(command -v bash)" 2>/dev/null || echo "bash.exe")
+
+        # Remove existing task if present
+        schtasks.exe /delete /tn "MullvadRotator" /f &>/dev/null || true
+
+        if schtasks.exe /create /tn "MullvadRotator" \
+            /tr "\"${bash_exe}\" --login -c \"\"${win_script_path}\" daemon\"" \
+            /sc minute /mo "$interval_mins" \
+            /f &>/dev/null; then
+            success "Daemon installed via Task Scheduler (every ${INTERVAL} min)"
+        else
+            warn "Failed to create scheduled task. Try running as administrator."
+        fi
     fi
 }
 
@@ -604,6 +644,9 @@ daemon_service_remove() {
         rm -f "${unit_dir}/mullvad-rotator.service" "${unit_dir}/mullvad-rotator.timer"
         systemctl --user daemon-reload 2>/dev/null || true
         success "Daemon removed"
+    elif [[ "$OS" == "windows" ]]; then
+        schtasks.exe /delete /tn "MullvadRotator" /f &>/dev/null || true
+        success "Daemon removed from Task Scheduler"
     fi
 }
 

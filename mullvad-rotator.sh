@@ -1,23 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Ensure common bin directories are in PATH (needed for non-interactive shells like launchd/systemd)
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+
 VERSION="1.0.0"
 
-# --- Paths ---
+# ═══════════════════════════════════════════════════════════
+# Paths & Defaults
+# ═══════════════════════════════════════════════════════════
+
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 CONFIG_DIR="${HOME}/.config/mullvad-rotator"
 CONFIG_FILE="${CONFIG_DIR}/config"
 CACHE_FILE="${CONFIG_DIR}/countries.cache"
-PID_FILE="/tmp/mullvad-rotator.pid"
 CACHE_TTL=3600
 
-# --- Default config values ---
 COUNTRIES=""
 MODE="random"
 INTERVAL=0
 ROTATE_KEY=false
+LAST_ROTATION=0
 
-# --- Color/ANSI ---
+# ═══════════════════════════════════════════════════════════
+# ANSI Colors
+# ═══════════════════════════════════════════════════════════
+
 BOLD=$'\033[1m'
 DIM=$'\033[2m'
 RED=$'\033[0;31m'
@@ -27,93 +35,26 @@ CYAN=$'\033[0;36m'
 NC=$'\033[0m'
 CHECK="✓"
 
-# --- TUI helpers ---
-BOX_WIDTH=60
+# ═══════════════════════════════════════════════════════════
+# OS Detection
+# ═══════════════════════════════════════════════════════════
 
-strip_ansi() { printf '%s' "$1" | sed $'s/\e\\[[0-9;]*m//g'; }
+case "$(uname)" in
+    Darwin) OS="macos"; STAT_CMD="stat -f %m" ;;
+    Linux)  OS="linux";  STAT_CMD="stat -c %Y" ;;
+    *)      echo "Unsupported OS: $(uname)" >&2; exit 1 ;;
+esac
 
-draw_box_line() {
-    local content="$1" width="${2:-$BOX_WIDTH}"
-    local inner=$(( width - 4 ))
-    local visible
-    visible=$(strip_ansi "$content")
-    local pad=$(( inner - ${#visible} ))
-    (( pad < 0 )) && pad=0
-    printf "│ %s%*s │\n" "$content" "$pad" ""
-}
+# ═══════════════════════════════════════════════════════════
+# Utility Functions
+# ═══════════════════════════════════════════════════════════
 
-draw_box_top()    { printf "┌"; printf '─%.0s' $(seq 1 $(($BOX_WIDTH - 2))); printf "┐\n"; }
-draw_box_bottom() { printf "└"; printf '─%.0s' $(seq 1 $(($BOX_WIDTH - 2))); printf "┘\n"; }
-draw_box_sep()    { printf "├"; printf '─%.0s' $(seq 1 $(($BOX_WIDTH - 2))); printf "┤\n"; }
-draw_box_line_plain() { printf "─%.0s" $(seq 1 "$BOX_WIDTH"); printf "\n"; }
-
-read_key() {
-    KEY=""
-    local byte
-    IFS= read -rsn1 byte
-
-    if [[ "$byte" == $'\x1b' ]]; then
-        local char1="" char2="" char3=""
-        if read -rsn1 -t 1 char1; then
-            if [[ "$char1" == "[" ]]; then
-                if read -rsn1 -t 1 char2; then
-                    if [[ "$char2" =~ ^[0-9]$ ]]; then
-                        if read -rsn1 -t 1 char3; then
-                            if [[ "$char3" == "~" ]]; then
-                                case "$char2" in
-                                    5) KEY="pageup" ;;
-                                    6) KEY="pagedown" ;;
-                                    *) KEY="unknown" ;;
-                                esac
-                            else
-                                KEY="unknown"
-                            fi
-                        else
-                            KEY="unknown"
-                        fi
-                    else
-                        case "$char2" in
-                            A) KEY="up" ;;
-                            B) KEY="down" ;;
-                            H) KEY="home" ;;
-                            F) KEY="end" ;;
-                            *) KEY="unknown" ;;
-                        esac
-                    fi
-                else
-                    KEY="unknown"
-                fi
-            else
-                KEY="unknown"
-            fi
-        else
-            KEY="escape"
-        fi
-    elif [[ "$byte" == $'\x7f' || "$byte" == $'\x08' ]]; then
-        KEY="backspace"
-    elif [[ "$byte" == "" ]]; then
-        KEY="enter"
-    elif [[ "$byte" == " " ]]; then
-        KEY="space"
-    elif [[ "$byte" =~ ^[[:print:]]$ ]]; then
-        KEY="$byte"
-    else
-        KEY="unknown"
-    fi
-}
-
-tui_cursor_hide() { printf "\033[?25l"; trap 'printf "\033[?25h"' EXIT; }
-tui_cursor_show() { printf "\033[?25h"; trap - EXIT; }
-
-tui_die() { error "$*"; [[ "${TUI_MODE:-false}" == "true" ]] && return 1 || exit 1; }
-
-# --- Utility functions ---
-log()    { echo -e "$*" >&2; }
-info()   { log "${CYAN}::${NC} $*"; }
-success(){ log "${GREEN}::${NC} $*"; }
-warn()   { log "${YELLOW}::${NC} $*"; }
-error()  { log "${RED}!!${NC} $*"; }
-die()    { error "$*"; exit 1; }
+log()     { echo -e "$*" >&2; }
+info()    { log "${CYAN}::${NC} $*"; }
+success() { log "${GREEN}::${NC} $*"; }
+warn()    { log "${YELLOW}::${NC} $*"; }
+error()   { log "${RED}!!${NC} $*"; }
+die()     { error "$*"; exit 1; }
 
 confirm() {
     local prompt="$1" default="${2:-y}"
@@ -128,14 +69,10 @@ confirm() {
     [[ "$ans" =~ ^[Yy] ]]
 }
 
-# --- OS detection ---
-case "$(uname)" in
-    Darwin) OS="macos"; STAT_CMD="stat -f %m" ;;
-    Linux)  OS="linux";  STAT_CMD="stat -c %Y" ;;
-    *)      die "Unsupported OS: $(uname)" ;;
-esac
+# ═══════════════════════════════════════════════════════════
+# Config Management
+# ═══════════════════════════════════════════════════════════
 
-# --- Config management ---
 init_config() {
     mkdir -p "$CONFIG_DIR"
     [[ -f "$CONFIG_FILE" ]] && return
@@ -145,6 +82,7 @@ COUNTRIES=""
 MODE="random"
 INTERVAL=0
 ROTATE_KEY=false
+LAST_ROTATION=0
 EOF
     info "Created config at $CONFIG_FILE"
 }
@@ -161,10 +99,14 @@ COUNTRIES="${COUNTRIES}"
 MODE="${MODE}"
 INTERVAL=${INTERVAL}
 ROTATE_KEY=${ROTATE_KEY}
+LAST_ROTATION=${LAST_ROTATION}
 EOF
 }
 
-# --- Relay list parsing and caching ---
+# ═══════════════════════════════════════════════════════════
+# Cache & Relay List
+# ═══════════════════════════════════════════════════════════
+
 refresh_cache() {
     info "Fetching relay list from Mullvad..."
     local output
@@ -221,20 +163,33 @@ load_country_arrays() {
     done
 }
 
-# --- Connection status functions ---
+# ═══════════════════════════════════════════════════════════
+# Connection Status
+# ═══════════════════════════════════════════════════════════
+
 get_status_json() {
     mullvad status --json 2>/dev/null || echo '{"state":"error"}'
+}
+
+# Extract a JSON string value from flat or nested JSON.
+# Matches "key":"value" pairs only (ignores "key":{...} and "key":null).
+_json_val() {
+    local json="$1" key="$2"
+    printf '%s' "$json" \
+        | grep -o "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" \
+        | head -1 \
+        | sed 's/.*:[[:space:]]*"//;s/"$//'
 }
 
 get_status_summary() {
     local json
     json=$(get_status_json)
 
-    state=$(echo "$json" | grep '"state"' | sed 's/.*"state":[[:space:]]*"\([^"]*\)".*/\1/')
-    hostname=$(echo "$json" | grep '"hostname"' | sed 's/.*"hostname":[[:space:]]*"\([^"]*\)".*/\1/')
-    country=$(echo "$json" | grep '"country"' | sed 's/.*"country":[[:space:]]*"\([^"]*\)".*/\1/')
-    city=$(echo "$json" | grep '"city"' | sed 's/.*"city":[[:space:]]*"\([^"]*\)".*/\1/')
-    ipv4=$(echo "$json" | grep '"ipv4"' | sed 's/.*"ipv4":[[:space:]]*"\([^"]*\)".*/\1/')
+    state=$(_json_val "$json" state)
+    hostname=$(_json_val "$json" hostname)
+    country=$(_json_val "$json" country)
+    city=$(_json_val "$json" city)
+    ipv4=$(_json_val "$json" ipv4)
 
     state="${state:-unknown}"
     hostname="${hostname:--}"
@@ -252,50 +207,150 @@ print_status_line() {
     fi
 }
 
-# --- Main TUI menu ---
-show_main_menu() {
-    TUI_MODE=true
-    local menu_cursor=0
-    local menu_items=(
-        "Rotate connection"
-        "Rotate WireGuard key"
-        "Select countries"
-        "Show available countries"
-        "View detailed status"
-        "Set rotation interval"
-        "Install/remove daemon service"
-        "Exit"
-    )
-    
+# ═══════════════════════════════════════════════════════════
+# TUI Primitives
+# ═══════════════════════════════════════════════════════════
+
+BOX_WIDTH=60
+
+tui_clear() {
+    if [[ -t 1 && -n "${TERM:-}" ]]; then
+        command clear
+    fi
+}
+
+strip_ansi() { printf '%s' "$1" | sed $'s/\e\\[[0-9;]*m//g'; }
+
+draw_box_line() {
+    local content="$1" width="${2:-$BOX_WIDTH}"
+    local inner=$(( width - 4 ))
+    local visible
+    visible=$(strip_ansi "$content")
+    local pad=$(( inner - ${#visible} ))
+    (( pad < 0 )) && pad=0
+    printf "│ %s%*s │\n" "$content" "$pad" ""
+}
+
+draw_box_top()    { printf "┌"; printf '─%.0s' $(seq 1 $(($BOX_WIDTH - 2))); printf "┐\n"; }
+draw_box_bottom() { printf "└"; printf '─%.0s' $(seq 1 $(($BOX_WIDTH - 2))); printf "┘\n"; }
+draw_box_sep()    { printf "├"; printf '─%.0s' $(seq 1 $(($BOX_WIDTH - 2))); printf "┤\n"; }
+draw_box_rule()   { printf "─%.0s" $(seq 1 "$BOX_WIDTH"); printf "\n"; }
+
+read_key() {
+    KEY=""
+    local byte
+    if [[ -n "${1:-}" ]]; then
+        if ! IFS= read -rsn1 -t "$1" byte; then
+            KEY="timeout"
+            return
+        fi
+    else
+        if ! IFS= read -rsn1 byte; then
+            KEY="timeout"
+            return
+        fi
+    fi
+
+    if [[ "$byte" == $'\x1b' ]]; then
+        local char1="" char2="" char3=""
+        if read -rsn1 -t 1 char1; then
+            if [[ "$char1" == "[" ]]; then
+                if read -rsn1 -t 1 char2; then
+                    if [[ "$char2" =~ ^[0-9]$ ]]; then
+                        if read -rsn1 -t 1 char3; then
+                            if [[ "$char3" == "~" ]]; then
+                                case "$char2" in
+                                    5) KEY="pageup" ;;
+                                    6) KEY="pagedown" ;;
+                                    *) KEY="unknown" ;;
+                                esac
+                            else
+                                KEY="unknown"
+                            fi
+                        else
+                            KEY="unknown"
+                        fi
+                    else
+                        case "$char2" in
+                            A) KEY="up" ;;
+                            B) KEY="down" ;;
+                            H) KEY="home" ;;
+                            F) KEY="end" ;;
+                            *) KEY="unknown" ;;
+                        esac
+                    fi
+                else
+                    KEY="unknown"
+                fi
+            else
+                KEY="unknown"
+            fi
+        else
+            KEY="escape"
+        fi
+    elif [[ "$byte" == $'\x7f' || "$byte" == $'\x08' ]]; then
+        KEY="backspace"
+    elif [[ "$byte" == "" ]]; then
+        KEY="enter"
+    elif [[ "$byte" == " " ]]; then
+        KEY="space"
+    elif [[ "$byte" =~ ^[[:print:]]$ ]]; then
+        KEY="$byte"
+    else
+        KEY="unknown"
+    fi
+}
+
+tui_cursor_hide() { printf "\033[?25l"; trap 'printf "\033[?25h"' EXIT; }
+tui_cursor_show() { printf "\033[?25h"; trap - EXIT; }
+
+tui_die() { error "$*"; [[ "${TUI_MODE:-false}" == "true" ]] && return 1 || exit 1; }
+
+press_enter() {
+    echo ""
+    read -p "Press Enter to continue..."
+}
+
+# Generic keyboard-driven menu. Sets MENU_RESULT to 1-based index of selected
+# item, or 0 for escape/back.
+#
+# Usage: tui_menu_select "Title" item1 item2 ...
+#   Optional: pass items prefixed with "!" to render them in red (destructive).
+tui_menu_select() {
+    local title="$1"; shift
+    local items=("$@")
+    local count=${#items[@]}
+    local cursor=0
+
     tui_cursor_hide
 
     while true; do
-        clear
+        tui_clear
         draw_box_top
-        draw_box_line "${BOLD}Mullvad Rotator v${VERSION}${NC}"
-        draw_box_sep
-        get_status_summary
-        local status_str
-        if [[ "$state" == "connected" ]]; then
-            status_str="Status: ${GREEN}${state}${NC}"
-        else
-            status_str="Status: ${YELLOW}${state}${NC}"
-        fi
-        draw_box_line "$status_str"
-        draw_box_line "Relay: ${hostname}"
-        draw_box_line "Location: ${country}/${city}"
-        
-        local interval_str="manual"
-        (( INTERVAL > 0 )) && interval_str="${INTERVAL}m"
-        draw_box_line "Mode: ${MODE} | Interval: ${interval_str}"
+        draw_box_line "$title"
         draw_box_sep
 
-        for ((i=0; i<8; i++)); do
-            local num=$((i+1))
-            if (( i == menu_cursor )); then
-                draw_box_line "${BOLD}${GREEN}> ${num}) ${menu_items[$i]}${NC}"
+        for ((i=0; i<count; i++)); do
+            local num=$((i + 1))
+            local label="${items[$i]}"
+            local destructive=false
+            if [[ "$label" == !* ]]; then
+                label="${label#!}"
+                destructive=true
+            fi
+
+            if (( i == cursor )); then
+                if $destructive; then
+                    draw_box_line "${BOLD}${RED}> ${num}) ${label}${NC}"
+                else
+                    draw_box_line "${BOLD}${GREEN}> ${num}) ${label}${NC}"
+                fi
             else
-                draw_box_line "  ${num}) ${menu_items[$i]}"
+                if $destructive; then
+                    draw_box_line "  ${RED}${num}) ${label}${NC}"
+                else
+                    draw_box_line "  ${num}) ${label}"
+                fi
             fi
         done
 
@@ -309,16 +364,390 @@ show_main_menu() {
         local action=0
         case "$KEY" in
             up)
-                menu_cursor=$(( (menu_cursor - 1 + 8) % 8 ))
+                cursor=$(( (cursor - 1 + count) % count ))
                 ;;
             down)
-                menu_cursor=$(( (menu_cursor + 1) % 8 ))
+                cursor=$(( (cursor + 1) % count ))
+                ;;
+            enter)
+                action=$(( cursor + 1 ))
+                ;;
+            [1-9])
+                (( KEY <= count )) && action="$KEY"
+                ;;
+            escape)
+                MENU_RESULT=0
+                tui_cursor_show
+                return
+                ;;
+        esac
+
+        if (( action > 0 )); then
+            MENU_RESULT=$action
+            tui_cursor_show
+            return
+        fi
+    done
+}
+
+# ═══════════════════════════════════════════════════════════
+# Core Rotation
+# ═══════════════════════════════════════════════════════════
+
+pick_random_country() {
+    if [[ "$MODE" == "random" ]]; then
+        load_country_arrays
+        local total=${#countries_codes[@]}
+        local idx=$((RANDOM % total))
+        echo "${countries_codes[$idx]}"
+    else
+        # Pick from selected countries
+        IFS=' ' read -ra codes <<< "$COUNTRIES"
+        [[ ${#codes[@]} -eq 0 ]] && { load_country_arrays; idx=$((RANDOM % ${#countries_codes[@]})); echo "${countries_codes[$idx]}"; return; }
+        local idx=$((RANDOM % ${#codes[@]}))
+        echo "${codes[$idx]}"
+    fi
+}
+
+rotate_connection() {
+    local dry_run=false
+    [[ "${1:-}" == "--dry-run" ]] && dry_run=true
+
+    local target_country
+    target_country=$(pick_random_country)
+    local country_name
+    country_name=$(get_cached_countries | grep "^${target_country}|" | cut -d'|' -f2)
+    country_name="${country_name:-$target_country}"
+
+    info "Rotating to: ${country_name} (${target_country})"
+    $dry_run && { info "[DRY RUN] Would set location: ${target_country}"; return; }
+
+    get_status_summary
+
+    if [[ "$state" != "connected" ]]; then
+        info "Not connected. Connecting..."
+        mullvad relay set location "$target_country" || tui_die "Failed to set location"
+        mullvad connect --wait || tui_die "Failed to connect"
+    else
+        mullvad relay set location "$target_country" || tui_die "Failed to set location"
+
+        local should_reconnect=true
+        if [[ "${TUI_MODE:-false}" == "true" ]]; then
+            confirm "Reconnect now?" || should_reconnect=false
+        fi
+
+        if $should_reconnect; then
+            info "Reconnecting..."
+            mullvad reconnect --wait 2>/dev/null || {
+                warn "Reconnect failed, trying fresh connect..."
+                mullvad disconnect 2>/dev/null
+                sleep 1
+                mullvad connect --wait 2>/dev/null || tui_die "Failed to connect"
+            }
+        fi
+    fi
+
+    sleep 1
+    get_status_summary
+    if [[ "$state" == "connected" ]]; then
+        success "Connected to ${hostname} (${city}, ${country})"
+        LAST_ROTATION=$(date +%s)
+        save_config
+    else
+        warn "State: ${state}"
+    fi
+}
+
+rotate_wireguard_key() {
+    info "Rotating WireGuard key..."
+    if ! confirm "This will immediately invalidate the current key. Continue?" "n"; then
+        info "Cancelled."
+        return
+    fi
+
+    mullvad tunnel set rotate-key 2>/dev/null || tui_die "Failed to rotate key"
+
+    if confirm "Reconnect with new key?"; then
+        mullvad reconnect --wait 2>/dev/null || {
+            warn "Reconnect failed"
+            mullvad connect --wait 2>/dev/null
+        }
+        get_status_summary
+        success "Key rotated and reconnected via ${hostname}"
+    else
+        success "Key rotated. Reconnect manually when ready."
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════
+# Daemon Management
+# ═══════════════════════════════════════════════════════════
+
+is_daemon_installed() {
+    if [[ "$OS" == "macos" ]]; then
+        [[ -f "${HOME}/Library/LaunchAgents/com.user.mullvad-rotator.plist" ]]
+    elif [[ "$OS" == "linux" ]]; then
+        [[ -f "${HOME}/.config/systemd/user/mullvad-rotator.timer" ]]
+    else
+        return 1
+    fi
+}
+
+daemon_service_install() {
+    info "Installing Mullvad Rotator daemon..."
+
+    if [[ "$OS" == "macos" ]]; then
+        local plist_dir="${HOME}/Library/LaunchAgents"
+        local plist="${plist_dir}/com.user.mullvad-rotator.plist"
+        mkdir -p "$plist_dir"
+
+        local interval_secs=$((INTERVAL * 60))
+        (( interval_secs < 60 )) && interval_secs=1800  # default 30min
+
+        cat > "$plist" <<-EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.user.mullvad-rotator</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${SCRIPT_PATH}</string>
+        <string>daemon</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>${interval_secs}</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>${CONFIG_DIR}/daemon.log</string>
+    <key>StandardErrorPath</key>
+    <string>${CONFIG_DIR}/daemon.log</string>
+</dict>
+</plist>
+EOF
+
+        # Unload any existing version first
+        launchctl bootout "gui/$(id -u)/com.user.mullvad-rotator" 2>/dev/null || \
+            launchctl unload "$plist" 2>/dev/null || true
+
+        # Load with modern API, fallback to legacy
+        if launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || \
+           launchctl load "$plist" 2>/dev/null; then
+            success "Daemon installed and loaded (every ${INTERVAL} min)"
+        else
+            warn "Created plist but launchctl load failed. Try: launchctl load ${plist}"
+        fi
+
+    elif [[ "$OS" == "linux" ]]; then
+        local unit_dir="${HOME}/.config/systemd/user"
+        mkdir -p "$unit_dir"
+
+        cat > "${unit_dir}/mullvad-rotator.service" <<-EOF
+[Unit]
+Description=Mullvad Rotator
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=${SCRIPT_PATH} daemon
+EOF
+
+        cat > "${unit_dir}/mullvad-rotator.timer" <<-EOF
+[Unit]
+Description=Rotate Mullvad VPN connection periodically
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=${INTERVAL}min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+        systemctl --user daemon-reload 2>/dev/null
+        systemctl --user enable --now mullvad-rotator.timer 2>/dev/null && \
+            success "Daemon installed (every ${INTERVAL} min)" || \
+            warn "Created service files but systemctl failed. Check manually."
+    fi
+}
+
+daemon_service_remove() {
+    if [[ "$OS" == "macos" ]]; then
+        local plist="${HOME}/Library/LaunchAgents/com.user.mullvad-rotator.plist"
+        local label="com.user.mullvad-rotator"
+        local uid
+        uid=$(id -u)
+
+        # Stop and unregister with modern API, then legacy fallback
+        launchctl bootout "gui/${uid}/${label}" 2>/dev/null || \
+            launchctl bootout "gui/${uid}" "$plist" 2>/dev/null || \
+            launchctl unload "$plist" 2>/dev/null || true
+
+        # Remove plist file
+        if [[ -f "$plist" ]]; then
+            rm -f "$plist"
+        fi
+
+        # Verify it's actually gone
+        if launchctl list "$label" &>/dev/null; then
+            warn "Service may still be running. Try: launchctl bootout gui/${uid}/${label}"
+        else
+            success "Daemon removed"
+        fi
+    elif [[ "$OS" == "linux" ]]; then
+        local unit_dir="${HOME}/.config/systemd/user"
+        systemctl --user stop mullvad-rotator.timer 2>/dev/null || true
+        systemctl --user disable mullvad-rotator.timer 2>/dev/null || true
+        rm -f "${unit_dir}/mullvad-rotator.service" "${unit_dir}/mullvad-rotator.timer"
+        systemctl --user daemon-reload 2>/dev/null || true
+        success "Daemon removed"
+    fi
+}
+
+stop_auto_rotation() {
+    info "Stopping auto rotation..."
+    INTERVAL=0
+    save_config
+    daemon_service_remove
+    success "Auto rotation stopped. Interval set to manual."
+}
+
+daemon_mode() {
+    load_config
+    rotate_connection
+    if [[ "$ROTATE_KEY" == "true" ]]; then
+        mullvad tunnel set rotate-key 2>/dev/null || warn "Key rotation failed"
+    fi
+}
+
+daemon_setup() {
+    load_config
+    INTERVAL="${INTERVAL:-30}"
+    save_config
+    daemon_service_install
+}
+
+# ═══════════════════════════════════════════════════════════
+# TUI Screens
+# ═══════════════════════════════════════════════════════════
+
+show_main_menu() {
+    TUI_MODE=true
+    local menu_cursor=0
+    local auto_active=false
+    local menu_items=()
+    local menu_count=0
+
+    tui_cursor_hide
+
+    while true; do
+        load_config
+
+        # Detect if auto-rotation daemon is active
+        auto_active=false
+        if (( INTERVAL > 0 )) && is_daemon_installed; then
+            auto_active=true
+        fi
+
+        # Build dynamic menu
+        menu_items=(
+            "Rotate connection"
+            "Rotate WireGuard key"
+            "Select countries"
+            "Show available countries"
+            "View detailed status"
+            "Set rotation interval"
+        )
+        if $auto_active; then
+            menu_items+=("Stop auto rotation")
+        fi
+        menu_items+=("Install/remove daemon service" "Exit")
+        menu_count=${#menu_items[@]}
+
+        # Clamp cursor
+        (( menu_cursor >= menu_count )) && menu_cursor=$(( menu_count - 1 ))
+
+        tui_clear
+        draw_box_top
+        draw_box_line "${BOLD}Mullvad Rotator v${VERSION}${NC}"
+        draw_box_sep
+        get_status_summary
+        local status_str
+        if [[ "$state" == "connected" ]]; then
+            status_str="Status: ${GREEN}${state}${NC}"
+        else
+            status_str="Status: ${YELLOW}${state}${NC}"
+        fi
+        draw_box_line "$status_str"
+        draw_box_line "Relay: ${hostname}"
+        draw_box_line "Location: ${country}/${city}"
+
+        local interval_str="manual"
+        (( INTERVAL > 0 )) && interval_str="${INTERVAL}m"
+        draw_box_line "Mode: ${MODE} | Interval: ${interval_str}"
+        if (( INTERVAL > 0 )); then
+            local remaining_str="now"
+            if (( LAST_ROTATION > 0 )); then
+                local now
+                now=$(date +%s)
+                local elapsed=$(( now - LAST_ROTATION ))
+                local remaining=$(( INTERVAL * 60 - elapsed ))
+                if (( remaining > 0 )); then
+                    if (( remaining >= 3600 )); then
+                        remaining_str="$(( remaining / 3600 ))h $(( (remaining % 3600) / 60 ))m $(( remaining % 60 ))s"
+                    else
+                        remaining_str="$(( remaining / 60 ))m $(( remaining % 60 ))s"
+                    fi
+                fi
+            fi
+            draw_box_line "Remaining: ${remaining_str}"
+        fi
+        draw_box_sep
+
+        for ((i=0; i<menu_count; i++)); do
+            local num=$((i+1))
+            if (( i == menu_cursor )); then
+                if [[ "${menu_items[$i]}" == "Stop auto rotation" ]]; then
+                    draw_box_line "${BOLD}${RED}> ${num}) ${menu_items[$i]}${NC}"
+                else
+                    draw_box_line "${BOLD}${GREEN}> ${num}) ${menu_items[$i]}${NC}"
+                fi
+            else
+                if [[ "${menu_items[$i]}" == "Stop auto rotation" ]]; then
+                    draw_box_line "  ${RED}${num}) ${menu_items[$i]}${NC}"
+                else
+                    draw_box_line "  ${num}) ${menu_items[$i]}"
+                fi
+            fi
+        done
+
+        draw_box_sep
+        draw_box_line "↑↓ Navigate  Enter Select"
+        draw_box_bottom
+        echo ""
+
+        if (( INTERVAL > 0 )); then
+            read_key 1
+        else
+            read_key
+        fi
+
+        local action=0
+        case "$KEY" in
+            up)
+                menu_cursor=$(( (menu_cursor - 1 + menu_count) % menu_count ))
+                ;;
+            down)
+                menu_cursor=$(( (menu_cursor + 1) % menu_count ))
                 ;;
             enter)
                 action=$(( menu_cursor + 1 ))
                 ;;
-            1|2|3|4|5|6|7|8)
-                action="$KEY"
+            [1-9])
+                (( KEY <= menu_count )) && action="$KEY"
                 ;;
             *)
                 ;;
@@ -326,15 +755,17 @@ show_main_menu() {
 
         if (( action > 0 )); then
             tui_cursor_show
-            case "$action" in
-                1) rotate_connection; press_enter ;;
-                2) rotate_wireguard_key; press_enter ;;
-                3) select_countries_tui; press_enter ;;
-                4) show_country_list; press_enter ;;
-                5) show_detailed_status; press_enter ;;
-                6) set_rotation_interval; press_enter ;;
-                7) daemon_menu ;;
-                8)
+            local item="${menu_items[$((action - 1))]}"
+            case "$item" in
+                "Rotate connection") rotate_connection; press_enter ;;
+                "Rotate WireGuard key") rotate_wireguard_key; press_enter ;;
+                "Select countries") select_countries_tui; press_enter ;;
+                "Show available countries") show_country_list; press_enter ;;
+                "View detailed status") show_detailed_status; press_enter ;;
+                "Set rotation interval") set_rotation_interval; press_enter ;;
+                "Stop auto rotation") stop_auto_rotation; press_enter ;;
+                "Install/remove daemon service") daemon_menu ;;
+                "Exit")
                     if confirm "Exit?" "n"; then
                         exit 0
                     fi
@@ -345,12 +776,6 @@ show_main_menu() {
     done
 }
 
-press_enter() {
-    echo ""
-    read -p "Press Enter to continue..."
-}
-
-# --- Country TUI selection ---
 select_countries_tui() {
     load_country_arrays
 
@@ -372,7 +797,6 @@ select_countries_tui() {
     local total=${#countries_codes[@]}
     local filter_query=""
 
-    # Hide cursor
     tui_cursor_hide
 
     while true; do
@@ -415,7 +839,7 @@ select_countries_tui() {
             scroll_offset=0
         fi
 
-        clear
+        tui_clear
         draw_box_top
         draw_box_line "Select Countries (↑↓/Space/Enter)"
         draw_box_line "Type to search. Backspace to delete."
@@ -426,7 +850,7 @@ select_countries_tui() {
         else
             printf "${DIM}Search: Type to filter... (e.g. 'se' or 'sweden')${NC}\n"
         fi
-        draw_box_line_plain
+        draw_box_rule
 
         if (( filtered_total == 0 )); then
             echo "  [No matching countries found]"
@@ -436,7 +860,7 @@ select_countries_tui() {
                 local i=${filtered_indices[$w]}
                 local mark=" "
                 [[ "${selected[$i]}" == "1" ]] && mark="${CHECK}"
-                
+
                 if (( w == cursor )); then
                     printf "${BOLD}${GREEN}> [%s] %-25s (%s)${NC}\n" "$mark" "${countries_names[$i]}" "${countries_codes[$i]}"
                 else
@@ -445,14 +869,13 @@ select_countries_tui() {
             done
         fi
 
-        draw_box_line_plain
+        draw_box_rule
         local sel_count=0
         for s in "${selected[@]}"; do
             [[ "$s" == "1" ]] && (( sel_count++ ))
         done
         printf "Viewing %d/%d countries | Selected: %d | PgUp/PgDn\n" "$filtered_total" "$total" "$sel_count"
 
-        # Read key press
         read_key
 
         case "$KEY" in
@@ -531,7 +954,6 @@ select_countries_tui() {
         esac
     done
 
-    # Restore cursor
     tui_cursor_show
 
     # Save selection
@@ -562,7 +984,7 @@ select_countries_tui() {
 
 show_country_list() {
     load_country_arrays
-    clear
+    tui_clear
     echo "Available countries:"
     echo ""
     for ((i=0; i<${#countries_codes[@]}; i++)); do
@@ -572,92 +994,8 @@ show_country_list() {
     echo "Total: ${#countries_codes[@]} countries"
 }
 
-# --- Core rotation functions ---
-pick_random_country() {
-    if [[ "$MODE" == "random" ]]; then
-        load_country_arrays
-        local total=${#countries_codes[@]}
-        local idx=$((RANDOM % total))
-        echo "${countries_codes[$idx]}"
-    else
-        # Pick from selected countries
-        IFS=' ' read -ra codes <<< "$COUNTRIES"
-        [[ ${#codes[@]} -eq 0 ]] && { load_country_arrays; idx=$((RANDOM % ${#countries_codes[@]})); echo "${countries_codes[$idx]}"; return; }
-        local idx=$((RANDOM % ${#codes[@]}))
-        echo "${codes[$idx]}"
-    fi
-}
-
-rotate_connection() {
-    local dry_run=false
-    [[ "${1:-}" == "--dry-run" ]] && dry_run=true
-
-    local target_country
-    target_country=$(pick_random_country)
-    local country_name
-    country_name=$(get_cached_countries | grep "^${target_country}|" | cut -d'|' -f2)
-    country_name="${country_name:-$target_country}"
-
-    info "Rotating to: ${country_name} (${target_country})"
-    $dry_run && { info "[DRY RUN] Would set location: ${target_country}"; return; }
-
-    get_status_summary
-
-    if [[ "$state" != "connected" ]]; then
-        info "Not connected. Connecting..."
-        mullvad relay set location "$target_country" || tui_die "Failed to set location"
-        mullvad connect --wait || tui_die "Failed to connect"
-    else
-        mullvad relay set location "$target_country" || tui_die "Failed to set location"
-
-        local should_reconnect=true
-        if [[ "${TUI_MODE:-false}" == "true" ]]; then
-            confirm "Reconnect now?" || should_reconnect=false
-        fi
-
-        if $should_reconnect; then
-            info "Reconnecting..."
-            mullvad reconnect --wait 2>/dev/null || {
-                warn "Reconnect failed, trying fresh connect..."
-                mullvad disconnect 2>/dev/null
-                sleep 1
-                mullvad connect --wait 2>/dev/null || tui_die "Failed to connect"
-            }
-        fi
-    fi
-
-    sleep 1
-    get_status_summary
-    if [[ "$state" == "connected" ]]; then
-        success "Connected to ${hostname} (${city}, ${country})"
-    else
-        warn "State: ${state}"
-    fi
-}
-
-rotate_wireguard_key() {
-    info "Rotating WireGuard key..."
-    if ! confirm "This will immediately invalidate the current key. Continue?" "n"; then
-        info "Cancelled."
-        return
-    fi
-
-    mullvad tunnel set rotate-key 2>/dev/null || tui_die "Failed to rotate key"
-
-    if confirm "Reconnect with new key?"; then
-        mullvad reconnect --wait 2>/dev/null || {
-            warn "Reconnect failed"
-            mullvad connect --wait 2>/dev/null
-        }
-        get_status_summary
-        success "Key rotated and reconnected via ${hostname}"
-    else
-        success "Key rotated. Reconnect manually when ready."
-    fi
-}
-
 show_detailed_status() {
-    clear
+    tui_clear
     draw_box_top
     draw_box_line "Mullvad Connection Status"
     draw_box_sep
@@ -690,7 +1028,6 @@ show_detailed_status() {
     draw_box_bottom
 }
 
-# --- Daemon and interval management ---
 set_rotation_interval() {
     echo ""
     echo "Current interval: ${INTERVAL} minutes (0 = manual only)"
@@ -708,13 +1045,7 @@ set_rotation_interval() {
         fi
     else
         info "Manual mode. Use 'Rotate connection' from menu."
-        local has_daemon=false
-        if [[ "$OS" == "macos" ]]; then
-            [[ -f "${HOME}/Library/LaunchAgents/com.user.mullvad-rotator.plist" ]] && has_daemon=true
-        elif [[ "$OS" == "linux" ]]; then
-            [[ -f "${HOME}/.config/systemd/user/mullvad-rotator.timer" ]] && has_daemon=true
-        fi
-        if $has_daemon; then
+        if is_daemon_installed; then
             if confirm "Daemon service is installed. Remove it now?" "y"; then
                 daemon_service_remove
             fi
@@ -722,178 +1053,38 @@ set_rotation_interval() {
     fi
 }
 
-daemon_service_install() {
-    clear
-    info "Installing Mullvad Rotator daemon..."
-
-    if [[ "$OS" == "macos" ]]; then
-        local plist_dir="${HOME}/Library/LaunchAgents"
-        local plist="${plist_dir}/com.user.mullvad-rotator.plist"
-        mkdir -p "$plist_dir"
-
-        local interval_secs=$((INTERVAL * 60))
-        (( interval_secs < 60 )) && interval_secs=1800  # default 30min
-
-        cat > "$plist" <<-EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.user.mullvad-rotator</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>${SCRIPT_PATH}</string>
-        <string>daemon</string>
-    </array>
-    <key>StartInterval</key>
-    <integer>${interval_secs}</integer>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>${CONFIG_DIR}/daemon.log</string>
-    <key>StandardErrorPath</key>
-    <string>${CONFIG_DIR}/daemon.log</string>
-</dict>
-</plist>
-EOF
-
-        launchctl load "$plist" 2>/dev/null && \
-            success "Daemon installed and loaded (every ${INTERVAL} min)" || \
-            warn "Created plist but launchctl load failed. Try: launchctl load ${plist}"
-
-    elif [[ "$OS" == "linux" ]]; then
-        local unit_dir="${HOME}/.config/systemd/user"
-        mkdir -p "$unit_dir"
-
-        cat > "${unit_dir}/mullvad-rotator.service" <<-EOF
-[Unit]
-Description=Mullvad Rotator
-After=network.target
-
-[Service]
-Type=oneshot
-ExecStart=${SCRIPT_PATH} daemon
-EOF
-
-        cat > "${unit_dir}/mullvad-rotator.timer" <<-EOF
-[Unit]
-Description=Rotate Mullvad VPN connection periodically
-
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=${INTERVAL}min
-
-[Install]
-WantedBy=timers.target
-EOF
-
-        systemctl --user daemon-reload 2>/dev/null
-        systemctl --user enable --now mullvad-rotator.timer 2>/dev/null && \
-            success "Daemon installed (every ${INTERVAL} min)" || \
-            warn "Created service files but systemctl failed. Check manually."
-    fi
-}
-
-daemon_service_remove() {
-    if [[ "$OS" == "macos" ]]; then
-        local plist="${HOME}/Library/LaunchAgents/com.user.mullvad-rotator.plist"
-        if [[ -f "$plist" ]]; then
-            launchctl unload "$plist" 2>/dev/null || true
-            rm "$plist"
-            success "Daemon removed"
-        else
-            info "No daemon installed"
-        fi
-    elif [[ "$OS" == "linux" ]]; then
-        local unit_dir="${HOME}/.config/systemd/user"
-        systemctl --user disable --now mullvad-rotator.timer 2>/dev/null || true
-        rm -f "${unit_dir}/mullvad-rotator.service" "${unit_dir}/mullvad-rotator.timer"
-        systemctl --user daemon-reload 2>/dev/null || true
-        success "Daemon removed"
-    fi
-}
-
 daemon_menu() {
-    local d_cursor=0
-    local d_items=(
-        "Install daemon"
-        "Remove daemon"
-        "Back"
-    )
-
-    tui_cursor_hide
-
     while true; do
-        clear
-        draw_box_top
-        draw_box_line "Daemon Service"
-        draw_box_sep
-
-        for ((i=0; i<3; i++)); do
-            local num=$((i+1))
-            if (( i == d_cursor )); then
-                draw_box_line "${BOLD}${GREEN}> ${num}) ${d_items[$i]}${NC}"
-            else
-                draw_box_line "  ${num}) ${d_items[$i]}"
-            fi
-        done
-
-        draw_box_sep
-        draw_box_line "↑↓ Navigate  Enter Select"
-        draw_box_bottom
-        echo ""
-
-        read_key
-
-        local action=0
-        case "$KEY" in
-            up)
-                d_cursor=$(( (d_cursor - 1 + 3) % 3 ))
-                ;;
-            down)
-                d_cursor=$(( (d_cursor + 1) % 3 ))
-                ;;
-            enter)
-                action=$(( d_cursor + 1 ))
-                ;;
-            1|2|3)
-                action="$KEY"
-                ;;
-            escape)
-                action=3
-                ;;
+        tui_menu_select "Daemon Service" "Install daemon" "Remove daemon" "Back"
+        case "$MENU_RESULT" in
+            1) daemon_service_install; press_enter ;;
+            2) daemon_service_remove; press_enter ;;
+            *) return ;;
         esac
-
-        if (( action > 0 )); then
-            tui_cursor_show
-            case "$action" in
-                1) daemon_service_install; press_enter ;;
-                2) daemon_service_remove; press_enter ;;
-                3) return ;;
-            esac
-            tui_cursor_hide
-        fi
     done
 }
 
-daemon_mode() {
-    load_config
-    rotate_connection
-    if [[ "$ROTATE_KEY" == "true" ]]; then
-        mullvad tunnel set rotate-key 2>/dev/null || warn "Key rotation failed"
-    fi
+# ═══════════════════════════════════════════════════════════
+# CLI Entry Point
+# ═══════════════════════════════════════════════════════════
+
+show_help() {
+    cat <<-EOF
+Mullvad Rotator v${VERSION}
+
+Usage:
+  $(basename "$0")           Interactive TUI menu
+  $(basename "$0") rotate    Rotate to a random country (supports --dry-run)
+  $(basename "$0") rotate-key  Rotate WireGuard key
+  $(basename "$0") status    Show detailed status
+  $(basename "$0") daemon    Run one rotation cycle (for daemon service)
+  $(basename "$0") daemon-setup Setup and install daemon service
+  $(basename "$0") --help    Show this help
+
+Config: ~/.config/mullvad-rotator/config
+EOF
 }
 
-daemon_setup() {
-    load_config
-    INTERVAL="${INTERVAL:-30}"
-    save_config
-    daemon_service_install
-}
-
-# --- CLI argument parsing and main entry point ---
 main() {
     load_config
 
@@ -932,28 +1123,4 @@ main() {
     esac
 }
 
-show_help() {
-    cat <<-EOF
-Mullvad Rotator v${VERSION}
-
-Usage:
-  $(basename "$0")           Interactive TUI menu
-  $(basename "$0") rotate    Rotate to a random country (supports --dry-run)
-  $(basename "$0") rotate-key  Rotate WireGuard key
-  $(basename "$0") status    Show detailed status
-  $(basename "$0") daemon    Run one rotation cycle (for daemon service)
-  $(basename "$0") daemon-setup Setup and install daemon service
-  $(basename "$0") --help    Show this help
-
-Config: ~/.config/mullvad-rotator/config
-EOF
-}
-
 main "$@"
-
-
-
-
-
-
-

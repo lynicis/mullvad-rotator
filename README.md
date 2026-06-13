@@ -6,7 +6,7 @@
   <a href="https://github.com/lynicis/homebrew-tap"><img src="https://img.shields.io/badge/brew-lynicis%2Ftap-%23FBB040" alt="Homebrew"></a>
   <a href="https://github.com/lynicis/scoop-bucket"><img src="https://img.shields.io/badge/scoop-lynicis-brightgreen" alt="Scoop"></a>
   <br>
-  <a href="https://github.com/lynicis/mullvad-rotator/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/lynicis/mullvad-rotator/release.yml?branch=main&label=release" alt="Release"></a>
+  <a href="https://github.com/lynicis/mullvad-rotator/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/lynicis/mullvad-rotator/release.yml?label=release" alt="Release"></a>
 </p>
 
 <p align="center">

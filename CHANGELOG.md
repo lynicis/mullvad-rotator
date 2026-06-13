@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.2] - 2026-06-13
+### Fixed
+- Optimize TUI rendering performance and frame rate (snappy menu navigation and character filtering) by caching status queries, pre-rendering borders, and using pure Bash operations to avoid external command forks (`seq`, `sed`, `tr`).
+
 ## [1.1.1] - 2026-06-13
 ### Fixed
 - Fix syntax error in generated Homebrew formula (missing closing `end` for the `Formula` class).

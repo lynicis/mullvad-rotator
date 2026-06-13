@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="1.1.1"
+VERSION="1.1.2"
 
 # ═══════════════════════════════════════════════════════════
 # OS Detection (must run before paths & PATH setup)
@@ -179,6 +179,8 @@ load_country_arrays() {
 # Connection Status
 # ═══════════════════════════════════════════════════════════
 
+STATUS_LAST_FETCH=0
+
 get_status_json() {
     mullvad status --json 2>/dev/null || echo '{"state":"error"}'
 }
@@ -195,6 +197,14 @@ _json_val() {
 }
 
 get_status_summary() {
+    local force="${1:-false}"
+    local now
+    now=$(date +%s)
+
+    if [[ "$force" != "true" ]] && [[ -n "${state:-}" ]] && (( now - STATUS_LAST_FETCH < 5 )); then
+        return
+    fi
+
     local json
     json=$(get_status_json)
 
@@ -209,10 +219,12 @@ get_status_summary() {
     country="${country:--}"
     city="${city:--}"
     ipv4="${ipv4:--}"
+
+    STATUS_LAST_FETCH=$now
 }
 
 print_status_line() {
-    get_status_summary
+    get_status_summary true
     if [[ "$state" == "connected" ]]; then
         printf "${GREEN}%-12s${NC} %s | %s, %s | %s\n" "$state" "$hostname" "$city" "$country" "$ipv4"
     else
@@ -226,13 +238,40 @@ print_status_line() {
 
 BOX_WIDTH=60
 
+# Pre-generate box borders to avoid calling 'seq' or 'sed' on every frame
+BOX_TOP="┌"
+BOX_BOTTOM="└"
+BOX_SEP="├"
+BOX_RULE=""
+for ((i=0; i<BOX_WIDTH-2; i++)); do
+    BOX_TOP+="─"
+    BOX_BOTTOM+="─"
+    BOX_SEP+="─"
+    BOX_RULE+="─"
+done
+BOX_TOP+="┐"
+BOX_BOTTOM+="┘"
+BOX_SEP+="┤"
+BOX_RULE+="──"
+
 tui_clear() {
     if [[ -t 1 && -n "${TERM:-}" ]]; then
         command clear
     fi
 }
 
-strip_ansi() { printf '%s' "$1" | sed $'s/\e\\[[0-9;]*m//g'; }
+strip_ansi() {
+    local text="$1"
+    local result=""
+    local remaining="$text"
+    while [[ "$remaining" == *$'\e'* ]]; do
+        result="${result}${remaining%%$'\e'*}"
+        local after_esc="${remaining#*$'\e'}"
+        remaining="${after_esc#*m}"
+    done
+    result="${result}${remaining}"
+    printf '%s' "$result"
+}
 
 draw_box_line() {
     local content="$1" width="${2:-$BOX_WIDTH}"
@@ -244,10 +283,10 @@ draw_box_line() {
     printf "│ %s%*s │\n" "$content" "$pad" ""
 }
 
-draw_box_top()    { printf "┌"; printf '─%.0s' $(seq 1 $(($BOX_WIDTH - 2))); printf "┐\n"; }
-draw_box_bottom() { printf "└"; printf '─%.0s' $(seq 1 $(($BOX_WIDTH - 2))); printf "┘\n"; }
-draw_box_sep()    { printf "├"; printf '─%.0s' $(seq 1 $(($BOX_WIDTH - 2))); printf "┤\n"; }
-draw_box_rule()   { printf "─%.0s" $(seq 1 "$BOX_WIDTH"); printf "\n"; }
+draw_box_top()    { printf "%s\n" "$BOX_TOP"; }
+draw_box_bottom() { printf "%s\n" "$BOX_BOTTOM"; }
+draw_box_sep()    { printf "%s\n" "$BOX_SEP"; }
+draw_box_rule()   { printf "%s\n" "$BOX_RULE"; }
 
 read_key() {
     KEY=""
@@ -435,7 +474,7 @@ rotate_connection() {
     info "Rotating to: ${country_name} (${target_country})"
     $dry_run && { info "[DRY RUN] Would set location: ${target_country}"; return; }
 
-    get_status_summary
+    get_status_summary true
 
     if [[ "$state" != "connected" ]]; then
         info "Not connected. Connecting..."
@@ -461,7 +500,7 @@ rotate_connection() {
     fi
 
     sleep 1
-    get_status_summary
+    get_status_summary true
     if [[ "$state" == "connected" ]]; then
         success "Connected to ${hostname} (${city}, ${country})"
         LAST_ROTATION=$(date +%s)
@@ -485,7 +524,7 @@ rotate_wireguard_key() {
             warn "Reconnect failed"
             mullvad connect --wait 2>/dev/null
         }
-        get_status_summary
+        get_status_summary true
         success "Key rotated and reconnected via ${hostname}"
     else
         success "Key rotated. Reconnect manually when ready."
@@ -685,6 +724,8 @@ show_main_menu() {
     local menu_items=()
     local menu_count=0
 
+    STATUS_LAST_FETCH=0
+
     tui_cursor_hide
 
     while true; do
@@ -846,22 +887,17 @@ select_countries_tui() {
     while true; do
         # Build filtered list of indices
         local filtered_indices=()
+        shopt -s nocasematch
         for ((i=0; i<total; i++)); do
             if [[ -z "$filter_query" ]]; then
                 filtered_indices+=("$i")
             else
-                # Case-insensitive substring match
-                local name_lower
-                name_lower=$(echo "${countries_names[$i]}" | tr '[:upper:]' '[:lower:]')
-                local code_lower
-                code_lower=$(echo "${countries_codes[$i]}" | tr '[:upper:]' '[:lower:]')
-                local query_lower
-                query_lower=$(echo "$filter_query" | tr '[:upper:]' '[:lower:]')
-                if [[ "$name_lower" == *"$query_lower"* || "$code_lower" == *"$query_lower"* ]]; then
+                if [[ "${countries_names[$i]}" == *"$filter_query"* || "${countries_codes[$i]}" == *"$filter_query"* ]]; then
                     filtered_indices+=("$i")
                 fi
             fi
         done
+        shopt -u nocasematch
 
         local filtered_total=${#filtered_indices[@]}
 
@@ -1019,8 +1055,9 @@ select_countries_tui() {
         info "No countries selected, using random mode."
     else
         MODE="selection"
-        local count
-        count=$(echo "$COUNTRIES" | wc -w | tr -d ' ')
+        local count_arr
+        read -ra count_arr <<< "$COUNTRIES"
+        local count=${#count_arr[@]}
         success "Selected ${count} country/ies"
     fi
     save_config
@@ -1044,7 +1081,7 @@ show_detailed_status() {
     draw_box_line "Mullvad Connection Status"
     draw_box_sep
 
-    get_status_summary
+    get_status_summary true
     draw_box_line "State:     $state"
     draw_box_line "Relay:     ${hostname:--}"
     draw_box_line "Location:  ${city}/${country}"

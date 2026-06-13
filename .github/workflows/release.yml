@@ -68,7 +68,7 @@ jobs:
             sha256 "${{ needs.release.outputs.sha256_tar }}"
             license "MIT"
 
-            depends_on "mullvad" => :run
+            depends_on "mullvad-vpn" => :run
 
             def install
               bin.install "mullvad-rotator.sh" => "mullvad-rotator"

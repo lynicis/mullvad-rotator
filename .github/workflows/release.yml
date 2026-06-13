@@ -82,6 +82,7 @@ jobs:
             test do
               assert_match version.to_s, shell_output("#{bin}/mullvad-rotator --version 2>&1")
             end
+          end
           RUBY
 
       - name: Commit & push

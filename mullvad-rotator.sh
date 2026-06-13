@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="1.1.0"
+VERSION="1.1.1"
 
 # ═══════════════════════════════════════════════════════════
 # OS Detection (must run before paths & PATH setup)
@@ -190,7 +190,8 @@ _json_val() {
     printf '%s' "$json" \
         | grep -o "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" \
         | head -1 \
-        | sed 's/.*:[[:space:]]*"//;s/"$//'
+        | sed 's/.*:[[:space:]]*"//;s/"$//' \
+        || true
 }
 
 get_status_summary() {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="1.1.2"
+VERSION="1.1.3"
 
 # ═══════════════════════════════════════════════════════════
 # OS Detection (must run before paths & PATH setup)
@@ -41,7 +41,6 @@ CACHE_TTL=3600
 COUNTRIES=""
 MODE="random"
 INTERVAL=0
-ROTATE_KEY=false
 LAST_ROTATION=0
 
 # ═══════════════════════════════════════════════════════════
@@ -93,7 +92,6 @@ init_config() {
 COUNTRIES=""
 MODE="random"
 INTERVAL=0
-ROTATE_KEY=false
 LAST_ROTATION=0
 EOF
     info "Created config at $CONFIG_FILE"
@@ -110,7 +108,6 @@ save_config() {
 COUNTRIES="${COUNTRIES}"
 MODE="${MODE}"
 INTERVAL=${INTERVAL}
-ROTATE_KEY=${ROTATE_KEY}
 LAST_ROTATION=${LAST_ROTATION}
 EOF
 }
@@ -510,27 +507,6 @@ rotate_connection() {
     fi
 }
 
-rotate_wireguard_key() {
-    info "Rotating WireGuard key..."
-    if ! confirm "This will immediately invalidate the current key. Continue?" "n"; then
-        info "Cancelled."
-        return
-    fi
-
-    mullvad tunnel set rotate-key 2>/dev/null || tui_die "Failed to rotate key"
-
-    if confirm "Reconnect with new key?"; then
-        mullvad reconnect --wait 2>/dev/null || {
-            warn "Reconnect failed"
-            mullvad connect --wait 2>/dev/null
-        }
-        get_status_summary true
-        success "Key rotated and reconnected via ${hostname}"
-    else
-        success "Key rotated. Reconnect manually when ready."
-    fi
-}
-
 # ═══════════════════════════════════════════════════════════
 # Daemon Management
 # ═══════════════════════════════════════════════════════════
@@ -701,9 +677,6 @@ stop_auto_rotation() {
 daemon_mode() {
     load_config
     rotate_connection
-    if [[ "$ROTATE_KEY" == "true" ]]; then
-        mullvad tunnel set rotate-key 2>/dev/null || warn "Key rotation failed"
-    fi
 }
 
 daemon_setup() {
@@ -740,7 +713,6 @@ show_main_menu() {
         # Build dynamic menu
         menu_items=(
             "Rotate connection"
-            "Rotate WireGuard key"
             "Select countries"
             "Show available countries"
             "View detailed status"
@@ -843,7 +815,6 @@ show_main_menu() {
             local item="${menu_items[$((action - 1))]}"
             case "$item" in
                 "Rotate connection") rotate_connection; press_enter ;;
-                "Rotate WireGuard key") rotate_wireguard_key; press_enter ;;
                 "Select countries") select_countries_tui; press_enter ;;
                 "Show available countries") show_country_list; press_enter ;;
                 "View detailed status") show_detailed_status; press_enter ;;
@@ -1156,7 +1127,6 @@ Mullvad Rotator v${VERSION}
 Usage:
   $(basename "$0")           Interactive TUI menu
   $(basename "$0") rotate    Rotate to a random country (supports --dry-run)
-  $(basename "$0") rotate-key  Rotate WireGuard key
   $(basename "$0") status    Show detailed status
   $(basename "$0") daemon    Run one rotation cycle (for daemon service)
   $(basename "$0") daemon-setup Setup and install daemon service
@@ -1173,9 +1143,6 @@ main() {
         rotate|--rotate)
             load_country_arrays
             rotate_connection "${@:2}"
-            ;;
-        rotate-key|--rotate-key)
-            rotate_wireguard_key
             ;;
         status|--status)
             show_detailed_status

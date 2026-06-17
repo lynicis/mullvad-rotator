@@ -50,9 +50,8 @@ bash -n mullvad-rotator.sh    # only test available (no test framework)
 
 ```
   ./mullvad-rotator.sh             Interactive TUI menu
-  ./mullvad-rotator.sh rotate      Rotate to a random country (supports --dry-run)
-  ./mullvad-rotator.sh rotate-key  Rotate WireGuard key
-  ./mullvad-rotator.sh status      Show detailed status
+  ./mullvad-rotator.sh rotate    Rotate to a random country (supports --dry-run)
+  ./mullvad-rotator.sh status    Show detailed status
   ./mullvad-rotator.sh daemon      Run one rotation cycle (for launchd/systemd/Task Scheduler)
   ./mullvad-rotator.sh daemon-setup  Setup and install daemon service
 ```

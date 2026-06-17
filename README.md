@@ -69,7 +69,6 @@ chmod +x /usr/local/bin/mullvad-rotator
 ```bash
 mullvad-rotator rotate              # Random relay
 mullvad-rotator rotate --dry-run    # Preview only
-mullvad-rotator rotate-key          # Rotate WireGuard key
 mullvad-rotator status              # Detailed connection status
 ```
 
@@ -84,13 +83,12 @@ Menu options:
 | # | Option |
 |---|--------|
 | 1 | Rotate connection |
-| 2 | Rotate WireGuard key |
-| 3 | Select countries |
-| 4 | Show available countries |
-| 5 | View detailed status |
-| 6 | Set rotation interval |
-| 7 | Install / remove daemon |
-| 8 | Exit |
+| 2 | Select countries |
+| 3 | Show available countries |
+| 4 | View detailed status |
+| 5 | Set rotation interval |
+| 6 | Install / remove daemon |
+| 7 | Exit |
 
 Country selector: Arrow keys to navigate, <kbd>Space</kbd> to toggle, type to filter, <kbd>Enter</kbd> to confirm, <kbd>a</kbd>/<kbd>n</kbd> for all/none, <kbd>Esc</kbd> to clear filter.
 
@@ -118,7 +116,6 @@ Set interval via TUI menu option 6 or by editing the config file.
 COUNTRIES="us de jp"    # Space-separated country codes (empty = all)
 MODE="random"           # Rotation mode
 INTERVAL=30             # Minutes between rotations (0 = disabled)
-ROTATE_KEY=false        # Also rotate WireGuard key on each cycle
 ```
 
 ## Uninstall

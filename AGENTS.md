@@ -54,6 +54,8 @@ bash -n mullvad-rotator.sh    # only test available (no test framework)
   ./mullvad-rotator.sh status    Show detailed status
   ./mullvad-rotator.sh daemon      Run one rotation cycle (for launchd/systemd/Task Scheduler)
   ./mullvad-rotator.sh daemon-setup  Setup and install daemon service
+  ./mullvad-rotator.sh proxy-enable  Enable automatic system SOCKS5 proxy settings
+  ./mullvad-rotator.sh proxy-disable Disable automatic system SOCKS5 proxy settings
 ```
 
 ## TUI country selector
@@ -66,12 +68,13 @@ search/filter, Enter to confirm, `a`/`n` for all/none, Esc to clear search.
 
 - `rotate_connection` asks to reconnect; `rotate_wireguard_key` asks to
   confirm — both need Y/n input.
-- Interval set via TUI menu option 6. Daemon install offered when interval > 0.
+- Interval set via TUI menu option 5. Daemon install offered when interval > 0.
+- SOCKS5 proxy settings toggled via TUI menu option 6. Automatically configures/removes system SOCKS5 proxy settings to 10.64.0.1:1080.
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **mullvad-rotator** (45 symbols, 39 relationships, 0 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **mullvad-rotator** (43 symbols, 38 relationships, 0 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 

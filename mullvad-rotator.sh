@@ -93,6 +93,7 @@ COUNTRIES=""
 MODE="random"
 INTERVAL=0
 LAST_ROTATION=0
+APPLY_PROXY=0
 EOF
     info "Created config at $CONFIG_FILE"
 }
@@ -100,6 +101,7 @@ EOF
 load_config() {
     init_config
     source "$CONFIG_FILE"
+    APPLY_PROXY="${APPLY_PROXY:-0}"
 }
 
 save_config() {
@@ -109,7 +111,127 @@ COUNTRIES="${COUNTRIES}"
 MODE="${MODE}"
 INTERVAL=${INTERVAL}
 LAST_ROTATION=${LAST_ROTATION}
+APPLY_PROXY=${APPLY_PROXY}
 EOF
+}
+
+# ═══════════════════════════════════════════════════════════
+# Proxy Management
+# ═══════════════════════════════════════════════════════════
+
+apply_macos_proxy() {
+    local host="10.64.0.1"
+    local port="1080"
+    local services
+    services=$(networksetup -listallnetworkservices | grep -v "An asterisk" || true)
+    
+    while IFS= read -r service; do
+        [[ -z "$service" ]] && continue
+        # Strip leading asterisk if present
+        local clean_service="${service#\*}"
+        # Trim leading and trailing whitespace
+        clean_service="${clean_service#"${clean_service%%[![:space:]]*}"}"
+        clean_service="${clean_service%"${clean_service##*[![:space:]]}"}"
+        
+        info "Setting SOCKS proxy on macOS service: ${clean_service}"
+        networksetup -setsocksfirewallproxy "$clean_service" "$host" "$port" || true
+        networksetup -setsocksfirewallproxystate "$clean_service" on || true
+    done <<< "$services"
+}
+
+disable_macos_proxy() {
+    local services
+    services=$(networksetup -listallnetworkservices | grep -v "An asterisk" || true)
+    
+    while IFS= read -r service; do
+        [[ -z "$service" ]] && continue
+        local clean_service="${service#\*}"
+        clean_service="${clean_service#"${clean_service%%[![:space:]]*}"}"
+        clean_service="${clean_service%"${clean_service##*[![:space:]]}"}"
+        
+        info "Disabling SOCKS proxy on macOS service: ${clean_service}"
+        networksetup -setsocksfirewallproxystate "$clean_service" off || true
+    done <<< "$services"
+}
+
+apply_linux_proxy() {
+    local host="10.64.0.1"
+    local port="1080"
+    
+    if command -v gsettings &>/dev/null; then
+        info "Applying SOCKS proxy via gsettings..."
+        gsettings set org.gnome.system.proxy mode 'manual' || true
+        gsettings set org.gnome.system.proxy.socks host "$host" || true
+        gsettings set org.gnome.system.proxy.socks port "$port" || true
+    else
+        warn "gsettings not found. SOCKS proxy could not be applied automatically to Gnome desktop settings."
+    fi
+}
+
+disable_linux_proxy() {
+    if command -v gsettings &>/dev/null; then
+        info "Disabling SOCKS proxy via gsettings..."
+        gsettings set org.gnome.system.proxy mode 'none' || true
+    fi
+}
+
+apply_windows_proxy() {
+    local host="10.64.0.1"
+    local port="1080"
+    info "Applying SOCKS proxy in Windows registry..."
+    reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyServer /t REG_SZ /d "socks=${host}:${port}" /f &>/dev/null || true
+    reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 1 /f &>/dev/null || true
+}
+
+disable_windows_proxy() {
+    info "Disabling SOCKS proxy in Windows registry..."
+    reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f &>/dev/null || true
+}
+
+apply_proxy_settings() {
+    if [[ "${APPLY_PROXY:-0}" != "1" ]]; then
+        return
+    fi
+    info "Applying Mullvad SOCKS5 proxy settings (10.64.0.1:1080)..."
+    if [[ "$OS" == "macos" ]]; then
+        apply_macos_proxy
+    elif [[ "$OS" == "linux" ]]; then
+        apply_linux_proxy
+    elif [[ "$OS" == "windows" ]]; then
+        apply_windows_proxy
+    fi
+    success "Proxy settings applied."
+}
+
+disable_proxy_settings() {
+    info "Removing Mullvad SOCKS5 proxy settings..."
+    if [[ "$OS" == "macos" ]]; then
+        disable_macos_proxy
+    elif [[ "$OS" == "linux" ]]; then
+        disable_linux_proxy
+    elif [[ "$OS" == "windows" ]]; then
+        disable_windows_proxy
+    fi
+    success "Proxy settings disabled."
+}
+
+toggle_proxy_settings() {
+    if [[ "$APPLY_PROXY" == "1" ]]; then
+        APPLY_PROXY=0
+        save_config
+        disable_proxy_settings
+        success "Proxy settings disabled and config saved."
+    else
+        APPLY_PROXY=1
+        save_config
+        get_status_summary true
+        if [[ "$state" == "connected" ]]; then
+            apply_proxy_settings
+            success "Proxy settings enabled and applied immediately (VPN is connected)."
+        else
+            warn "Proxy settings enabled in config. They will be applied next time you connect."
+        fi
+    fi
 }
 
 # ═══════════════════════════════════════════════════════════
@@ -502,8 +624,10 @@ rotate_connection() {
         success "Connected to ${hostname} (${city}, ${country})"
         LAST_ROTATION=$(date +%s)
         save_config
+        apply_proxy_settings
     else
         warn "State: ${state}"
+        disable_proxy_settings
     fi
 }
 
@@ -711,12 +835,15 @@ show_main_menu() {
         fi
 
         # Build dynamic menu
+        local proxy_status="disabled"
+        [[ "${APPLY_PROXY:-0}" == "1" ]] && proxy_status="enabled"
         menu_items=(
             "Rotate connection"
             "Select countries"
             "Show available countries"
             "View detailed status"
             "Set rotation interval"
+            "Toggle proxy settings (currently: ${proxy_status})"
         )
         if $auto_active; then
             menu_items+=("Stop auto rotation")
@@ -819,6 +946,7 @@ show_main_menu() {
                 "Show available countries") show_country_list; press_enter ;;
                 "View detailed status") show_detailed_status; press_enter ;;
                 "Set rotation interval") set_rotation_interval; press_enter ;;
+                "Toggle proxy settings"*) toggle_proxy_settings; press_enter ;;
                 "Stop auto rotation") stop_auto_rotation; press_enter ;;
                 "Install/remove daemon service") daemon_menu ;;
                 "Exit")
@@ -1130,6 +1258,8 @@ Usage:
   $(basename "$0") status    Show detailed status
   $(basename "$0") daemon    Run one rotation cycle (for daemon service)
   $(basename "$0") daemon-setup Setup and install daemon service
+  $(basename "$0") proxy-enable  Enable automatic system proxy settings
+  $(basename "$0") proxy-disable Disable automatic system proxy settings
   $(basename "$0") --help    Show this help
 
 Config: ~/.config/mullvad-rotator/config
@@ -1152,6 +1282,21 @@ main() {
             ;;
         daemon-setup)
             daemon_setup
+            ;;
+        proxy-enable)
+            APPLY_PROXY=1
+            save_config
+            get_status_summary true
+            if [[ "$state" == "connected" ]]; then
+                apply_proxy_settings
+            else
+                info "Proxy settings enabled in config. Will be applied on next VPN connection."
+            fi
+            ;;
+        proxy-disable)
+            APPLY_PROXY=0
+            save_config
+            disable_proxy_settings
             ;;
         --version|-v)
             echo "mullvad-rotator v${VERSION}"

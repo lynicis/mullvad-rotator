@@ -70,6 +70,8 @@ chmod +x /usr/local/bin/mullvad-rotator
 mullvad-rotator rotate              # Random relay
 mullvad-rotator rotate --dry-run    # Preview only
 mullvad-rotator status              # Detailed connection status
+mullvad-rotator proxy-enable        # Enable automatic system SOCKS5 proxy settings
+mullvad-rotator proxy-disable       # Disable automatic system SOCKS5 proxy settings
 ```
 
 ### TUI
@@ -87,8 +89,9 @@ Menu options:
 | 3 | Show available countries |
 | 4 | View detailed status |
 | 5 | Set rotation interval |
-| 6 | Install / remove daemon |
-| 7 | Exit |
+| 6 | Toggle proxy settings |
+| 7 | Install / remove daemon |
+| 8 | Exit |
 
 Country selector: Arrow keys to navigate, <kbd>Space</kbd> to toggle, type to filter, <kbd>Enter</kbd> to confirm, <kbd>a</kbd>/<kbd>n</kbd> for all/none, <kbd>Esc</kbd> to clear filter.
 
@@ -103,7 +106,7 @@ mullvad-rotator daemon          # Run one cycle (for timer)
 - **Linux**: Installs systemd user units at `~/.config/systemd/user/mullvad-rotator.{service,timer}`
 - **Windows**: Creates a Task Scheduler entry `MullvadRotator` (requires [Git Bash](https://gitforwindows.org/) or MSYS2)
 
-Set interval via TUI menu option 6 or by editing the config file.
+Set interval via TUI menu option 5 or by editing the config file.
 
 ## Configuration
 
@@ -116,6 +119,7 @@ Set interval via TUI menu option 6 or by editing the config file.
 COUNTRIES="us de jp"    # Space-separated country codes (empty = all)
 MODE="random"           # Rotation mode
 INTERVAL=30             # Minutes between rotations (0 = disabled)
+APPLY_PROXY=1           # Enable automatic system proxy settings (0 = disabled)
 ```
 
 ## Uninstall

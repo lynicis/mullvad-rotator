@@ -245,7 +245,7 @@ refresh_cache() {
 
     # Parse: lines starting with uppercase = country entries
     # Format: "Country Name (cc)"
-    echo "$output" | while IFS= read -r line; do
+    while IFS= read -r line; do
         if [[ "$line" =~ ^[[:upper:]] ]]; then
             # Trim leading/trailing whitespace
             line="${line#"${line%%[![:space:]]*}"}"
@@ -256,7 +256,7 @@ refresh_cache() {
                 echo "${code}|${name}"
             fi
         fi
-    done > "$CACHE_FILE"
+    done <<< "$output" > "$CACHE_FILE"
 
     if [[ ! -s "$CACHE_FILE" ]]; then
         die "Failed to parse relay list. Unexpected format."
@@ -379,25 +379,23 @@ tui_clear() {
     fi
 }
 
+# Sets STRIP_RESULT instead of printing — avoids subshell fork
 strip_ansi() {
-    local text="$1"
-    local result=""
-    local remaining="$text"
+    local remaining="$1"
+    STRIP_RESULT=""
     while [[ "$remaining" == *$'\e'* ]]; do
-        result="${result}${remaining%%$'\e'*}"
+        STRIP_RESULT+="${remaining%%$'\e'*}"
         local after_esc="${remaining#*$'\e'}"
         remaining="${after_esc#*m}"
     done
-    result="${result}${remaining}"
-    printf '%s' "$result"
+    STRIP_RESULT+="${remaining}"
 }
 
 draw_box_line() {
     local content="$1" width="${2:-$BOX_WIDTH}"
     local inner=$(( width - 4 ))
-    local visible
-    visible=$(strip_ansi "$content")
-    local pad=$(( inner - ${#visible} ))
+    strip_ansi "$content"
+    local pad=$(( inner - ${#STRIP_RESULT} ))
     (( pad < 0 )) && pad=0
     printf "│ %s%*s │\n" "$content" "$pad" ""
 }
@@ -637,7 +635,7 @@ rotate_connection() {
 
 is_daemon_installed() {
     if [[ "$OS" == "macos" ]]; then
-        [[ -f "${HOME}/Library/LaunchAgents/com.user.mullvad-rotator.plist" ]]
+        [[ -f "${HOME}/Library/LaunchAgents/com.lynicis.mullvad-rotator.plist" ]]
     elif [[ "$OS" == "linux" ]]; then
         [[ -f "${HOME}/.config/systemd/user/mullvad-rotator.timer" ]]
     elif [[ "$OS" == "windows" ]]; then
@@ -652,7 +650,7 @@ daemon_service_install() {
 
     if [[ "$OS" == "macos" ]]; then
         local plist_dir="${HOME}/Library/LaunchAgents"
-        local plist="${plist_dir}/com.user.mullvad-rotator.plist"
+        local plist="${plist_dir}/com.lynicis.mullvad-rotator.plist"
         mkdir -p "$plist_dir"
 
         local interval_secs=$((INTERVAL * 60))
@@ -665,7 +663,7 @@ daemon_service_install() {
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.user.mullvad-rotator</string>
+    <string>com.lynicis.mullvad-rotator</string>
     <key>ProgramArguments</key>
     <array>
         <string>${SCRIPT_PATH}</string>
@@ -684,7 +682,7 @@ daemon_service_install() {
 EOF
 
         # Unload any existing version first
-        launchctl bootout "gui/$(id -u)/com.user.mullvad-rotator" 2>/dev/null || \
+        launchctl bootout "gui/$(id -u)/com.lynicis.mullvad-rotator" 2>/dev/null || \
             launchctl unload "$plist" 2>/dev/null || true
 
         # Load with modern API, fallback to legacy
@@ -756,8 +754,8 @@ EOF
 
 daemon_service_remove() {
     if [[ "$OS" == "macos" ]]; then
-        local plist="${HOME}/Library/LaunchAgents/com.user.mullvad-rotator.plist"
-        local label="com.user.mullvad-rotator"
+        local plist="${HOME}/Library/LaunchAgents/com.lynicis.mullvad-rotator.plist"
+        local label="com.lynicis.mullvad-rotator"
         local uid
         uid=$(id -u)
 
@@ -820,18 +818,21 @@ show_main_menu() {
     local auto_active=false
     local menu_items=()
     local menu_count=0
+    local needs_reload=true
 
     STATUS_LAST_FETCH=0
 
     tui_cursor_hide
 
     while true; do
-        load_config
-
-        # Detect if auto-rotation daemon is active
-        auto_active=false
-        if (( INTERVAL > 0 )) && is_daemon_installed; then
-            auto_active=true
+        # Only reload config/daemon status after submenu actions, not every frame
+        if $needs_reload; then
+            load_config
+            auto_active=false
+            if (( INTERVAL > 0 )) && is_daemon_installed; then
+                auto_active=true
+            fi
+            needs_reload=false
         fi
 
         # Build dynamic menu
@@ -914,7 +915,7 @@ show_main_menu() {
         echo ""
 
         if (( INTERVAL > 0 )); then
-            read_key 1
+            read_key 5
         else
             read_key
         fi
@@ -955,6 +956,8 @@ show_main_menu() {
                     fi
                     ;;
             esac
+            needs_reload=true
+            STATUS_LAST_FETCH=0
             tui_cursor_hide
         fi
     done

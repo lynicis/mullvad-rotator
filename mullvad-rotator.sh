@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="1.1.4"
+VERSION="1.1.5"
 
 # ═══════════════════════════════════════════════════════════
 # OS Detection (must run before paths & PATH setup)
@@ -635,7 +635,8 @@ rotate_connection() {
 
 is_daemon_installed() {
     if [[ "$OS" == "macos" ]]; then
-        [[ -f "${HOME}/Library/LaunchAgents/com.lynicis.mullvad-rotator.plist" ]]
+        [[ -f "${HOME}/Library/LaunchAgents/com.lynicis.mullvad-rotator.plist" ]] || \
+        [[ -f "${HOME}/Library/LaunchAgents/com.user.mullvad-rotator.plist" ]]
     elif [[ "$OS" == "linux" ]]; then
         [[ -f "${HOME}/.config/systemd/user/mullvad-rotator.timer" ]]
     elif [[ "$OS" == "windows" ]]; then
@@ -652,6 +653,19 @@ daemon_service_install() {
         local plist_dir="${HOME}/Library/LaunchAgents"
         local plist="${plist_dir}/com.lynicis.mullvad-rotator.plist"
         mkdir -p "$plist_dir"
+
+        # Clean up legacy daemon first if it exists
+        local legacy_label="com.user.mullvad-rotator"
+        local legacy_plist="${plist_dir}/${legacy_label}.plist"
+        local uid
+        uid=$(id -u)
+        if [[ -f "$legacy_plist" || -n "$(launchctl list "$legacy_label" 2>/dev/null)" ]]; then
+            info "Cleaning up legacy daemon..."
+            launchctl bootout "gui/${uid}/${legacy_label}" 2>/dev/null || \
+                launchctl bootout "gui/${uid}" "$legacy_plist" 2>/dev/null || \
+                launchctl unload "$legacy_plist" 2>/dev/null || true
+            rm -f "$legacy_plist"
+        fi
 
         local interval_secs=$((INTERVAL * 60))
         (( interval_secs < 60 )) && interval_secs=1800  # default 30min
@@ -682,7 +696,7 @@ daemon_service_install() {
 EOF
 
         # Unload any existing version first
-        launchctl bootout "gui/$(id -u)/com.lynicis.mullvad-rotator" 2>/dev/null || \
+        launchctl bootout "gui/${uid}/com.lynicis.mullvad-rotator" 2>/dev/null || \
             launchctl unload "$plist" 2>/dev/null || true
 
         # Load with modern API, fallback to legacy
@@ -754,26 +768,36 @@ EOF
 
 daemon_service_remove() {
     if [[ "$OS" == "macos" ]]; then
-        local plist="${HOME}/Library/LaunchAgents/com.lynicis.mullvad-rotator.plist"
-        local label="com.lynicis.mullvad-rotator"
         local uid
         uid=$(id -u)
+        local removed_any=false
 
-        # Stop and unregister with modern API, then legacy fallback
-        launchctl bootout "gui/${uid}/${label}" 2>/dev/null || \
-            launchctl bootout "gui/${uid}" "$plist" 2>/dev/null || \
-            launchctl unload "$plist" 2>/dev/null || true
+        for label in "com.lynicis.mullvad-rotator" "com.user.mullvad-rotator"; do
+            local plist="${HOME}/Library/LaunchAgents/${label}.plist"
+            if [[ -f "$plist" || -n "$(launchctl list "$label" 2>/dev/null)" ]]; then
+                # Stop and unregister with modern API, then legacy fallback
+                launchctl bootout "gui/${uid}/${label}" 2>/dev/null || \
+                    launchctl bootout "gui/${uid}" "$plist" 2>/dev/null || \
+                    launchctl unload "$plist" 2>/dev/null || true
 
-        # Remove plist file
-        if [[ -f "$plist" ]]; then
-            rm -f "$plist"
-        fi
+                # Remove plist file
+                if [[ -f "$plist" ]]; then
+                    rm -f "$plist"
+                fi
+                removed_any=true
+            fi
+        done
 
-        # Verify it's actually gone
-        if launchctl list "$label" &>/dev/null; then
-            warn "Service may still be running. Try: launchctl bootout gui/${uid}/${label}"
+        # Verify both are actually gone
+        if launchctl list "com.lynicis.mullvad-rotator" &>/dev/null || \
+           launchctl list "com.user.mullvad-rotator" &>/dev/null; then
+            warn "Service may still be running. Try: launchctl bootout gui/${uid}/com.lynicis.mullvad-rotator"
         else
-            success "Daemon removed"
+            if $removed_any; then
+                success "Daemon removed"
+            else
+                info "No daemon was installed"
+            fi
         fi
     elif [[ "$OS" == "linux" ]]; then
         local unit_dir="${HOME}/.config/systemd/user"

@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.5] - 2026-06-21
+### Fixed
+- Clean up legacy `com.user.mullvad-rotator` launchd agent on macOS when installing or removing the daemon.
+- Update documentation references to point to the correct launch agent plist.
+
 ## [1.1.4] - 2026-06-21
 ### Added
 - System-wide SOCKS5 proxy configuration support with manual toggle (TUI option 6) and automatic application on connection.

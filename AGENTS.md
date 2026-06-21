@@ -37,7 +37,7 @@ bash -n mullvad-rotator.sh    # only test available (no test framework)
   via `mullvad relay list`.
 - **Daemon log:** `<config_dir>/daemon.log`.
 - **Daemon platform split:** macOS → launchd plist at
-  `~/Library/LaunchAgents/com.user.mullvad-rotator.plist`. Linux → systemd
+  `~/Library/LaunchAgents/com.lynicis.mullvad-rotator.plist`. Linux → systemd
   user units at `~/.config/systemd/user/mullvad-rotator.{service,timer}`.
   Windows → Task Scheduler entry `MullvadRotator` via `schtasks.exe`.
 - **Subcommands:** `daemon` (one rotation cycle, for the OS timer),

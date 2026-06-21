@@ -102,7 +102,7 @@ mullvad-rotator daemon-setup    # Interactive setup
 mullvad-rotator daemon          # Run one cycle (for timer)
 ```
 
-- **macOS**: Installs a launchd agent at `~/Library/LaunchAgents/com.user.mullvad-rotator.plist`
+- **macOS**: Installs a launchd agent at `~/Library/LaunchAgents/com.lynicis.mullvad-rotator.plist`
 - **Linux**: Installs systemd user units at `~/.config/systemd/user/mullvad-rotator.{service,timer}`
 - **Windows**: Creates a Task Scheduler entry `MullvadRotator` (requires [Git Bash](https://gitforwindows.org/) or MSYS2)
 
@@ -155,7 +155,7 @@ rm -rf ~/.config/mullvad-rotator
 
 ### Daemon cleanup
 
-- **macOS**: `launchctl unload ~/Library/LaunchAgents/com.user.mullvad-rotator.plist` then `rm ~/Library/LaunchAgents/com.user.mullvad-rotator.plist`
+- **macOS**: `launchctl unload ~/Library/LaunchAgents/com.lynicis.mullvad-rotator.plist` then `rm ~/Library/LaunchAgents/com.lynicis.mullvad-rotator.plist`
 - **Linux**: `systemctl --user disable mullvad-rotator.timer && systemctl --user stop mullvad-rotator.timer` then `rm ~/.config/systemd/user/mullvad-rotator.*`
 - **Windows**: `schtasks /delete /tn "MullvadRotator" /f`
 
